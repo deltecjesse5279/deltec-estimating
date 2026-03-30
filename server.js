@@ -77,7 +77,7 @@ async function deleteEstimate(id) {
 app.use(basicAuth({
   users: { [APP_USER]: APP_PASSWORD },
   challenge: true,
-  realm: 'Deltec Estimating'
+  realm: 'OnSite Estimating'
 }));
 
 app.use(express.json({ limit: '5mb' }));
@@ -143,7 +143,7 @@ app.delete('/api/estimates/:id', async (req, res) => {
 // Boot
 initStorage().then(() => {
   app.listen(PORT, () => {
-    console.log(`Deltec Estimating running on port ${PORT}`);
+    console.log(`OnSite Estimating running on port ${PORT}`);
   });
 }).catch(err => {
   console.error('Failed to initialise storage:', err);
