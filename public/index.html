@@ -1324,6 +1324,8 @@ function asmPickerAddToExisting(i){
   showToast(`Added to "${assemblies[i].name}"`);
   renderAssembliesPane();
 }
+
+function openAddLibItemModal(prefill){
   libAddEditCode = null;
   $('lib-add-title').textContent = 'Add Library Item';
   $('la-code').value = prefill?.code||'';
