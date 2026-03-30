@@ -59,6 +59,7 @@ td.num{text-align:right;font-variant-numeric:tabular-nums;font-size:12px;color:v
 .notes-input:focus{outline:none;border-color:var(--border);background:#fff}
 .del-btn{background:none;border:none;cursor:pointer;font-size:13px;color:#ccc;padding:0 4px;opacity:0;transition:opacity .1s}
 tr:hover .del-btn{opacity:1}
+@media(hover:none){.del-btn{opacity:.5}}
 .del-btn:hover{color:var(--danger)}
 .desc-cell{max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:var(--muted)}
 .unit-badge{font-size:10px;color:var(--muted);background:var(--bg3);padding:1px 5px;border-radius:4px}
@@ -113,6 +114,22 @@ tr.grand-row td{font-weight:600;font-size:14px;border-top:2px solid var(--border
 .toast{position:fixed;bottom:20px;right:20px;background:#1a1a18;color:#fff;padding:10px 16px;border-radius:var(--radius);font-size:13px;z-index:600;opacity:0;transition:opacity .2s;pointer-events:none}
 .toast.show{opacity:1}
 .row-num{font-size:11px;color:#bbb;min-width:22px;text-align:right}
+
+@media print {
+  body{background:#fff;font-size:12px}
+  .topbar,.tabs,.toolbar,.add-sheet-btn,.del-btn,.toast,.modal-overlay{display:none!important}
+  .pane{display:flex!important;padding:0}
+  #pane-takeoff,#pane-summary{page-break-after:always}
+  #pane-settings{display:none!important}
+  .sheet-tabs{display:flex}
+  .takeoff-wrap{border:none;overflow:visible}
+  .totals-bar{border:1px solid #ccc;margin-top:8px}
+  th{background:#eee!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .print-header{display:block!important}
+}
+.print-header{display:none;margin-bottom:16px}
+.print-header h2{font-size:16px;font-weight:600;margin-bottom:4px}
+.print-header p{font-size:12px;color:#666}
 </style>
 </head>
 <body>
@@ -127,6 +144,7 @@ tr.grand-row td{font-weight:600;font-size:14px;border-top:2px solid var(--border
   <div class="topbar-actions">
     <span class="save-indicator" id="save-ind"></span>
     <button class="btn" onclick="showEstimates()">&#128193; Estimates</button>
+    <button class="btn" onclick="exportPDF()">&#128196; Export PDF</button>
     <button class="btn success" onclick="saveEstimate()">&#10003; Save</button>
     <button class="btn primary" onclick="newEstimate()">+ New</button>
   </div>
@@ -140,6 +158,7 @@ tr.grand-row td{font-weight:600;font-size:14px;border-top:2px solid var(--border
 
 <!-- TAKEOFF PANE -->
 <div class="pane active" id="pane-takeoff">
+  <div class="print-header" id="print-header"></div>
   <div class="toolbar">
     <div class="sheet-tabs" id="sheet-tabs"></div>
     <button class="add-sheet-btn" onclick="addSheet()">+ sheet</button>
@@ -270,6 +289,13 @@ let saveTimeout = null;
 function markDirty(){
   dirty = true;
   setInd('saving','Unsaved');
+  clearTimeout(saveTimeout);
+  saveTimeout = setTimeout(async () => {
+    const payload = collectPayload();
+    if(payload.name && payload.name !== 'Untitled') {
+      await doSave(payload);
+    }
+  }, 3000);
 }
 
 function setInd(cls, text){
@@ -325,8 +351,33 @@ function fmtH(n){return (n||0).toFixed(2)+'h'}
 function renderSheetTabs(){
   const el = $('sheet-tabs');
   el.innerHTML = state.sheets.map((sh,i)=>
-    `<div class="sheet-tab ${i===state.activeSheet?'active':''}" onclick="switchSheet(${i})">${sh.name}</div>`
+    `<div class="sheet-tab ${i===state.activeSheet?'active':''}" onclick="switchSheet(${i})" ondblclick="renameSheet(${i})" title="Double-click to rename">${sh.name}</div>`
   ).join('');
+}
+
+function renameSheet(i){
+  const current = state.sheets[i].name;
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.value = current;
+  input.className = 'sheet-tab active';
+  input.style.cssText = 'width:90px;font-size:12px;padding:4px 8px;border:1px solid #888;border-radius:20px;outline:none;background:#fff;color:#1a1a18;';
+  const tabs = $('sheet-tabs').children[i];
+  tabs.replaceWith(input);
+  input.focus();
+  input.select();
+  const commit = () => {
+    const val = input.value.trim() || current;
+    state.sheets[i].name = val;
+    markDirty();
+    renderSheetTabs();
+    renderSummary();
+  };
+  input.addEventListener('blur', commit);
+  input.addEventListener('keydown', e => {
+    if(e.key === 'Enter') input.blur();
+    if(e.key === 'Escape'){ input.value = current; input.blur(); }
+  });
 }
 
 function renderCatFilter(){
@@ -342,8 +393,9 @@ function switchSheet(i){
 }
 
 function addSheet(){
-  const n = 'Sheet '+state.nextSheetId++;
-  state.sheets.push({id:state.nextSheetId, name:n, rows:[]});
+  const id = state.nextSheetId++;
+  const n = 'Sheet '+id;
+  state.sheets.push({id, name:n, rows:[]});
   state.activeSheet=state.sheets.length-1;
   renderSheetTabs();
   renderTakeoff();
@@ -461,7 +513,7 @@ function renderTakeoff(){
       <td><span class="unit-badge">${esc(row.unit||'')}</span></td>
       <td><input class="qty-input" type="number" min="0" value="${row.qty||''}" placeholder="0"
         oninput="updateQty(${i},this.value)"/></td>
-      <td class="num">${row.mat_unit?fmt(row.mat_unit,4):''}</td>
+      <td class="num">${row.mat_unit?fmt(row.mat_unit,2):''}</td>
       <td class="num">${row.qty?fmt(c.mat):''}</td>
       <td class="num">${row.labour_unit?(row.labour_unit).toFixed(4):''}</td>
       <td class="num">${row.qty?fmt(c.lab):''}</td>
@@ -545,9 +597,10 @@ function collectPayload(){
 
 async function saveEstimate(){
   const payload=collectPayload();
-  if(!payload.name||payload.name==='Untitled'){
-    $('est-name-input').value=payload.name;
+  if(!payload.name || payload.name.trim()==='' || payload.name==='Untitled'){
+    $('est-name-input').value = payload.name === 'Untitled' ? '' : payload.name;
     $('name-modal').style.display='flex';
+    setTimeout(()=>$('est-name-input').focus(), 50);
     return;
   }
   await doSave(payload);
@@ -650,6 +703,20 @@ function newEstimate(){
   $('s-gst').value=5;$('s-pst').value=7;
   dirty=false;setInd('','');
   renderSheetTabs();renderTakeoff();refreshAll();
+}
+
+function exportPDF(){
+  // Populate print header
+  const name = $('proj-name').value || 'Untitled Estimate';
+  const client = $('proj-client').value;
+  const num = $('proj-num').value;
+  const date = new Date().toLocaleDateString('en-CA');
+  $('print-header').innerHTML = `
+    <h2>${esc(name)}</h2>
+    <p>${client?esc(client)+' &nbsp;·&nbsp; ':''}${num?'Estimate #'+esc(num)+' &nbsp;·&nbsp; ':''}${date}</p>`;
+  // Switch to takeoff tab for print
+  switchTab('takeoff');
+  setTimeout(()=>window.print(), 100);
 }
 
 function showToast(msg){
