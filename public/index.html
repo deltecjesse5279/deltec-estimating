@@ -27,7 +27,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 .tabs{display:flex;border-bottom:1px solid var(--border);background:#fff;padding:0 20px}
 .tab{padding:9px 16px;font-size:13px;cursor:pointer;border-bottom:2px solid transparent;color:var(--muted);user-select:none}
 .tab.active{color:var(--text);border-bottom-color:var(--text);font-weight:500}
-.pane{display:none;padding:16px 20px;flex-direction:column;gap:12px}
+.pane{display:none;padding:16px 20px;flex-direction:column;gap:12px;overflow-y:auto;max-height:calc(100vh - 94px)}
 .pane.active{display:flex}
 .toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .toolbar select,.toolbar input{font-size:13px;padding:5px 9px;border:1px solid var(--border);border-radius:var(--radius);background:#fff;color:var(--text);height:32px}
@@ -260,6 +260,7 @@ select.filter-active{border-color:var(--amber);background:#fffbf2}
         <div class="mi" onclick="renameSheetMenu()">&#9998; Rename sheet</div>
         <div class="sep"></div>
         <div class="mi" onclick="exportSheetPDF()">&#128196; Export sheet PDF</div>
+        <div class="mi" onclick="exportSheetSummaryOnly()">&#128203; Export this sheet summary</div>
         <div class="sep"></div>
         <div class="mi" onclick="clearSheet()">&#10006; Clear sheet</div>
         <div class="mi danger" onclick="deleteSheet()">&#128465; Delete sheet</div>
@@ -305,6 +306,8 @@ select.filter-active{border-color:var(--amber);background:#fffbf2}
 
 <!-- SUMMARY PANE -->
 <div class="pane" id="pane-summary">
+  <div class="print-header" id="print-header"></div>
+  <!-- Per-sheet breakdown table -->
   <div class="summary-card">
     <table>
       <thead><tr>
@@ -321,9 +324,12 @@ select.filter-active{border-color:var(--amber);background:#fffbf2}
       <tfoot id="summary-foot"></tfoot>
     </table>
   </div>
-  <div style="max-width:400px">
-    <div class="summary-card">
-      <table><tbody id="grand-total-body"></tbody></table>
+  <!-- Accubid-style cost breakdown -->
+  <div style="max-width:460px">
+    <div class="summary-card" id="summary-breakdown-card">
+      <table style="width:100%;border-collapse:collapse;font-size:13px" id="summary-breakdown-table">
+        <tbody id="summary-breakdown-body"></tbody>
+      </table>
     </div>
   </div>
 </div>
@@ -402,6 +408,14 @@ select.filter-active{border-color:var(--amber);background:#fffbf2}
           <div class="field-row"><label>Estimator</label><input type="text" id="s-estimator" placeholder="Your name" oninput="markDirty()"/></div>
           <div class="field-row"><label>Office Contact</label><input type="text" id="s-contact" placeholder="Office contact name" oninput="markDirty()"/></div>
           <div class="field-row"><label>Phone / Email</label><input type="text" id="s-contactinfo" placeholder="604-555-0100 / email" oninput="markDirty()"/></div>
+        </div>
+      </div>
+      <div style="margin-top:10px">
+        <div class="field-row" style="align-items:flex-start">
+          <label style="padding-top:6px;min-width:140px">Project Description</label>
+          <textarea id="s-description" placeholder="Scope of work, notes, special conditions…"
+            oninput="markDirty()"
+            style="flex:1;font-size:13px;padding:6px 8px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg2);color:var(--text);resize:vertical;min-height:72px;line-height:1.5;font-family:inherit"></textarea>
         </div>
       </div>
     </div>
@@ -757,9 +771,12 @@ select.filter-active{border-color:var(--amber);background:#fffbf2}
 
 <!-- EXPORT MODAL -->
 <div class="modal-overlay" id="pdf-modal" style="display:none" onclick="if(event.target===this)closePdfModal()">
-  <div class="modal" style="width:460px">
-    <h3 style="margin-bottom:4px">Export Estimate</h3>
-    <p style="font-size:12px;color:var(--muted);margin-bottom:18px">Choose format and audience for your export</p>
+  <div class="modal" style="width:460px;max-height:90vh;display:flex;flex-direction:column;padding:0">
+    <div style="padding:20px 24px 0;flex-shrink:0">
+      <h3 style="margin-bottom:4px">Export Estimate</h3>
+      <p style="font-size:12px;color:var(--muted);margin-bottom:18px">Choose format and audience for your export</p>
+    </div>
+    <div style="overflow-y:auto;flex:1;padding:0 24px">
 
     <!-- Format type -->
     <div style="margin-bottom:16px">
@@ -813,8 +830,9 @@ select.filter-active{border-color:var(--amber);background:#fffbf2}
         <div class="export-toggle-btn active" id="inc-grand-lbl" onclick="toggleExportInclude('grand',this)">Grand total</div>
       </div>
     </div>
+    </div><!-- end scrollable area -->
 
-    <div class="modal-actions">
+    <div style="padding:14px 24px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:8px;flex-shrink:0">
       <button class="btn" onclick="closePdfModal()">Cancel</button>
       <button class="btn primary" onclick="confirmExportPDF()">&#128196; Export PDF</button>
     </div>
@@ -1070,6 +1088,120 @@ function renameSheetInline(i){
 function exportSheetPDF(){
   closeSheetMenu();
   exportPDF();
+}
+
+function exportSheetSummaryOnly(){
+  closeSheetMenu();
+  const sh = state.sheets[state.activeSheet];
+  const t = sheetTotals(sh);
+  const s = getSettings();
+
+  // Build a standalone print div for this single sheet
+  const old = document.getElementById('bom-print-area');
+  if(old) old.remove();
+  const printDiv = document.createElement('div');
+  printDiv.id = 'bom-print-area';
+  printDiv.style.cssText = 'position:fixed;left:-9999px;top:0;width:750px';
+
+  // Header
+  const hdr = document.createElement('div');
+  hdr.style.cssText = 'margin-bottom:16px';
+  let hdrHTML = '';
+  if($('proj-name').value) hdrHTML += `<h2 style="font-size:16px;font-weight:600;margin-bottom:4px">${esc($('proj-name').value)}</h2>`;
+  const meta = [$('proj-client').value, $('proj-num').value ? 'Est. #'+$('proj-num').value : '', new Date().toLocaleDateString('en-CA')].filter(Boolean);
+  if(meta.length) hdrHTML += `<p style="font-size:12px;color:#666">${meta.join(' &nbsp;·&nbsp; ')}</p>`;
+  hdrHTML += `<p style="font-size:13px;font-weight:600;margin-top:8px">Sheet: ${esc(sh.name)}</p>`;
+  hdr.innerHTML = hdrHTML;
+  printDiv.appendChild(hdr);
+
+  // Sheet breakdown table (items)
+  const table = document.createElement('table');
+  table.style.cssText = 'width:100%;border-collapse:collapse;font-size:11px;margin-bottom:16px';
+  const thead = table.createTHead();
+  const hrow = thead.insertRow();
+  ['#','Code','Description','Unit','Qty','Mat total','Lab hrs','Lab $'].forEach(h=>{
+    const th = document.createElement('th');
+    th.style.cssText = 'text-align:left;padding:4px 6px;background:#f0f0f0;border-bottom:1px solid #999;font-size:10px;color:#444;-webkit-print-color-adjust:exact;print-color-adjust:exact';
+    if(h==='Qty'||h==='Mat total'||h==='Lab hrs'||h==='Lab $') th.style.textAlign='right';
+    th.textContent = h;
+    hrow.appendChild(th);
+  });
+  const tbody = table.createTBody();
+  (sh.rows||[]).forEach((row,ri)=>{
+    const c = calcRow(row);
+    const trow = tbody.insertRow();
+    trow.style.borderBottom = '1px solid #eee';
+    const cells = [
+      ri+1,
+      row._assembly ? (row._asmName||'Assembly') : (row.code||''),
+      row._assembly ? `×${row.qty||1} (${(row._items||[]).length} items)` : (row.description||''),
+      row._assembly ? 'ls' : (row.unit||''),
+      row.qty||'',
+      row.qty ? fmt(c.mat) : '',
+      row.qty ? c.hrs.toFixed(2) : '',
+      row.qty ? fmt(c.lab) : ''
+    ];
+    cells.forEach((v,ci)=>{
+      const td = trow.insertCell();
+      td.style.cssText = 'padding:4px 6px;font-size:11px'+(ci>=4?';text-align:right':'');
+      td.textContent = String(v);
+    });
+  });
+  printDiv.appendChild(table);
+
+  // Summary box — Accubid style
+  const sumDiv = document.createElement('div');
+  sumDiv.style.cssText = 'max-width:380px;margin-left:auto;font-size:12px';
+
+  const matPst = t.rawMat * s.pst;
+  const matOh  = t.rawMat * s.oh;
+  const matMkp = t.rawMat * s.matMkp;
+  const matTotal = t.rawMat + matPst + matOh + matMkp;
+  const cont = (matTotal + t.rawLab) * s.cont;
+  const subtotal = matTotal + t.rawLab + cont;
+  const gst = subtotal * s.gst;
+  const grand = subtotal + gst;
+
+  function sumRow(label, value, bold, indent, topBorder, color){
+    return `<tr style="${topBorder?'border-top:2px solid #333;':''}">
+      <td style="padding:3px ${indent?'20px':'6px'} 3px 6px;color:${color||'#444'};${bold?'font-weight:600;':''}">${label}</td>
+      <td style="padding:3px 6px;text-align:right;font-variant-numeric:tabular-nums;${bold?'font-weight:600;':''}color:${color||'#222'}">${value}</td>
+    </tr>`;
+  }
+
+  let tableHTML = `<table style="width:100%;border-collapse:collapse;font-size:12px;border:1px solid #ccc">
+    ${sumRow('General Materials', fmt(t.rawMat), false)}
+    ${s.pst>0 ? sumRow(`Material PST (@\u00a0${(s.pst*100).toFixed(1)}\u00a0%)`, fmt(matPst), false, true) : ''}
+    ${s.oh>0  ? sumRow(`Material Overhead (@\u00a0${(s.oh*100).toFixed(1)}\u00a0%)`, fmt(matOh), false, true) : ''}
+    ${s.matMkp>0 ? sumRow(`Material Markup (@\u00a0${(s.matMkp*100).toFixed(1)}\u00a0%)`, fmt(matMkp), false, true) : ''}
+    ${sumRow('Material Total', fmt(matTotal), true, false, true)}
+    ${sumRow(`Labour (${t.labHrs.toFixed(2)}\u00a0hrs\u00a0@\u00a0$${s.jm}/hr)`, fmt(t.rawLab), false, false, true)}
+    ${cont > 0 ? sumRow(`Contingency (@\u00a0${(s.cont*100).toFixed(1)}\u00a0%)`, fmt(cont), false, true) : ''}
+    ${sumRow('Subtotal', fmt(subtotal), true, false, true)}
+    ${sumRow(`GST (@\u00a0${(s.gst*100).toFixed(1)}\u00a0%)`, fmt(gst), false, true)}
+    ${sumRow('Final Amount', fmt(grand), true, false, true, '#2d6b1f')}
+  </table>`;
+  sumDiv.innerHTML = tableHTML;
+  printDiv.appendChild(sumDiv);
+
+  document.body.appendChild(printDiv);
+
+  const styleId = 'pdf-print-style';
+  let styleEl = document.getElementById(styleId);
+  if(!styleEl){ styleEl = document.createElement('style'); styleEl.id=styleId; document.head.appendChild(styleEl); }
+  styleEl.textContent = `@media print {
+    body > *:not(#bom-print-area) { display: none !important; }
+    #bom-print-area { display: block !important; position: static !important; left: 0 !important; width: 100% !important; }
+  }`;
+
+  setTimeout(()=>{
+    window.print();
+    setTimeout(()=>{
+      styleEl.textContent = '';
+      const pd = document.getElementById('bom-print-area');
+      if(pd) pd.remove();
+    }, 1000);
+  }, 200);
 }
 
 // ============================================================
@@ -1620,11 +1752,11 @@ function renderTakeoff(){
       <td><input class="qty-input" type="number" min="0" value="${row.qty||''}" placeholder="0"
         oninput="updateQty(${i},this.value)" onchange="updateQty(${i},this.value)" onblur="updateQty(${i},this.value)"/></td>
       <td class="num">${isCustom
-        ? `<input type="number" value="${row.mat_unit||''}" placeholder="0.00" step="0.01" style="width:72px;text-align:right;font-size:12px;padding:2px 5px;border:1px solid var(--border);border-radius:4px;background:var(--amber-bg)" onchange="updateRowField(${i},'mat_unit',parseFloat(this.value)||0)"/>`
+        ? `<input type="number" value="${row.mat_unit||''}" placeholder="0.00" step="0.01" style="width:72px;text-align:right;font-size:12px;padding:2px 5px;border:1px solid var(--border);border-radius:4px;background:var(--amber-bg)" oninput="updateRowField(${i},'mat_unit',parseFloat(this.value)||0)" onchange="updateRowField(${i},'mat_unit',parseFloat(this.value)||0)"/>`
         : (row.mat_unit?fmt(row.mat_unit,2):'')}</td>
       <td class="num">${row.qty?fmt(c.mat):''}</td>
       <td class="num">${isCustom
-        ? `<input type="number" value="${row.labour_unit||''}" placeholder="0.000" step="0.001" style="width:60px;text-align:right;font-size:12px;padding:2px 5px;border:1px solid var(--border);border-radius:4px;background:var(--amber-bg)" onchange="updateRowField(${i},'labour_unit',parseFloat(this.value)||0)"/>`
+        ? `<input type="number" value="${row.labour_unit||''}" placeholder="0.000" step="0.001" style="width:60px;text-align:right;font-size:12px;padding:2px 5px;border:1px solid var(--border);border-radius:4px;background:var(--amber-bg)" oninput="updateRowField(${i},'labour_unit',parseFloat(this.value)||0)" onchange="updateRowField(${i},'labour_unit',parseFloat(this.value)||0)"/>`
         : (row.labour_unit?(row.labour_unit).toFixed(3):'')}</td>
       <td class="num">${row.qty?fmt(c.lab):''}</td>
       <td><input class="notes-input" type="text" value="${esc(row.notes||'')}" placeholder="notes"
@@ -1738,7 +1870,7 @@ function renderTotalsBar(){
 }
 
 function renderSummary(){
-  const body=$('summary-body'), foot=$('summary-foot'), gt=$('grand-total-body');
+  const body=$('summary-body'), foot=$('summary-foot');
   let tM=0,tL=0,tH=0,tMM=0,tO=0,tP=0,tS=0;
   body.innerHTML=state.sheets.map(sh=>{
     const t=sheetTotals(sh);
@@ -1754,19 +1886,50 @@ function renderSummary(){
     <td style="text-align:right">${fmtH(tH)}</td><td style="text-align:right">${fmt(tMM)}</td>
     <td style="text-align:right">${fmt(tO)}</td><td style="text-align:right">${fmt(tP)}</td>
     <td style="text-align:right">${fmt(tS)}</td></tr>`;
-  const s=getSettings();
-  const cont = tS * s.cont;
-  const afterCont = tS + cont;
-  const gst=afterCont*s.gst, pst=afterCont*s.pst, grand=afterCont+gst+pst;
-  const contRow = s.cont > 0
-    ? `<tr><td style="color:#888;font-size:12px;padding:8px 12px">Contingency (${(s.cont*100).toFixed(0)}%)</td><td style="text-align:right;padding:8px 12px">${fmt(cont)}</td></tr>`
-    : '';
-  gt.innerHTML=`
-    <tr><td style="color:#888;font-size:12px;padding:8px 12px">Subtotal</td><td style="text-align:right;padding:8px 12px">${fmt(tS)}</td></tr>
-    ${contRow}
-    <tr><td style="color:#888;font-size:12px;padding:8px 12px">GST (${(s.gst*100).toFixed(0)}%)</td><td style="text-align:right;padding:8px 12px">${fmt(gst)}</td></tr>
-    <tr><td style="color:#888;font-size:12px;padding:8px 12px">PST (${(s.pst*100).toFixed(0)}%)</td><td style="text-align:right;padding:8px 12px">${fmt(pst)}</td></tr>
-    <tr class="grand-row"><td style="padding:10px 12px;font-weight:600">Grand total</td><td class="val-cell" style="text-align:right;padding:10px 12px;font-size:15px;color:#2d6b1f">${fmt(grand)}</td></tr>`;
+
+  // Accubid-style breakdown
+  const s = getSettings();
+  // Material section: Raw → PST → Overhead → Markup → Material Total
+  const matPst  = tM * s.pst;
+  const matOh   = tM * s.oh;
+  const matMkp  = tM * s.matMkp;
+  const matTotal = tM + matPst + matOh + matMkp;
+  // Labour (not marked up, separate line)
+  const labTotal = tL; // already = hrs × JM rate from sheetTotals
+  // Contingency on combined
+  const cont = (matTotal + labTotal) * s.cont;
+  const subtotal = matTotal + labTotal + cont;
+  const gst = subtotal * s.gst;
+  const grand = subtotal + gst;
+
+  // Helper to build a table row
+  const br = (label, value, opts={}) => {
+    const {bold, indent, topBorder, color, divider} = opts;
+    const borderStyle = topBorder ? 'border-top:2px solid var(--border)' : divider ? 'border-top:1px solid var(--border)' : '';
+    return `<tr style="${borderStyle}">
+      <td style="padding:${bold?'9px':'6px'} 12px ${bold?'9px':'6px'} ${indent?'28px':'12px'};font-size:${bold?'13px':'12px'};color:${color||'var(--muted)'}${bold?';font-weight:600':''}">
+        ${label}
+      </td>
+      <td style="padding:${bold?'9px':'6px'} 12px;text-align:right;font-variant-numeric:tabular-nums;font-size:${bold?'13px':'12px'}${bold?';font-weight:600':''}${color?';color:'+color:''}">
+        ${value}
+      </td>
+    </tr>`;
+  };
+
+  let html = '';
+  html += br('General Materials', fmt(tM));
+  if(s.pst > 0)    html += br(`Material PST (@ ${(s.pst*100).toFixed(1)}%)`, fmt(matPst), {indent:true});
+  if(s.oh > 0)     html += br(`Material Overhead (@ ${(s.oh*100).toFixed(1)}%)`, fmt(matOh), {indent:true});
+  if(s.matMkp > 0) html += br(`Material Markup (@ ${(s.matMkp*100).toFixed(1)}%)`, fmt(matMkp), {indent:true});
+  html += br('Material Total', fmt(matTotal), {bold:true, divider:true});
+  html += br(`Labour (${tH.toFixed(2)} hrs @ $${(parseFloat($('s-jm').value)||115).toFixed(2)}/hr)`, fmt(labTotal), {divider:true});
+  if(cont > 0) html += br(`Contingency (@ ${(s.cont*100).toFixed(1)}%)`, fmt(cont), {indent:true});
+  html += br('Subtotal', fmt(subtotal), {bold:true, divider:true});
+  html += br(`GST (@ ${(s.gst*100).toFixed(1)}%)`, fmt(gst), {indent:true});
+  html += br('Final Amount', fmt(grand), {bold:true, topBorder:true, color:'var(--green)'});
+
+  $('summary-breakdown-body').innerHTML = html;
+}
 }
 
 function refreshAll(){
@@ -2308,7 +2471,8 @@ function collectPayload(){
       tender: $('s-tender').value,
       estimator: $('s-estimator').value,
       contact: $('s-contact').value,
-      contactinfo: $('s-contactinfo').value
+      contactinfo: $('s-contactinfo').value,
+      description: $('s-description').value
     },
     settings: {
       jm:$('s-jm').value, app:$('s-app').value,
@@ -2397,6 +2561,7 @@ async function loadEstimate(id){
       $('s-estimator').value=d.projectDetails.estimator||'';
       $('s-contact').value=d.projectDetails.contact||'';
       $('s-contactinfo').value=d.projectDetails.contactinfo||'';
+      $('s-description').value=d.projectDetails.description||'';
     }
     if(d.settings){
       $('s-jm').value=d.settings.jm||115;
@@ -2433,6 +2598,7 @@ function newEstimate(){
   $('proj-name').value='';$('proj-client').value='';$('proj-num').value='';
   $('s-address').value='';$('s-po').value='';$('s-tender').value='';
   $('s-estimator').value='';$('s-contact').value='';$('s-contactinfo').value='';
+  $('s-description').value='';
   $('s-jm').value=115;$('s-app').value=72;$('s-matmkp').value=10;
   $('s-oh').value=15;$('s-profit').value=10;$('s-cont').value=0;
   $('s-gst').value=5;$('s-pst').value=7;
