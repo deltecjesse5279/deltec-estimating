@@ -1930,7 +1930,6 @@ function renderSummary(){
 
   $('summary-breakdown-body').innerHTML = html;
 }
-}
 
 function refreshAll(){
   renderTotalsBar();
@@ -3046,7 +3045,6 @@ function openLibExportModal(){
     const cb=$('csv-col-'+k); if(cb) cb.checked=true;
   });
   const srcLbl=$('csv-col-source-lbl'); if(srcLbl) srcLbl.classList.remove('active');
-  const srcCb=$('csv-col-source'); if(srcCb) srcCb.checked=false;
   _csvSrc='all';
   ['all','default','custom'].forEach(s=>{
     const el=$('csv-src-'+s+'-lbl'); if(el) el.classList.toggle('active',s==='all');
