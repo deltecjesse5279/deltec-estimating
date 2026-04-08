@@ -293,9 +293,8 @@ tr:hover .dbtn{opacity:1}
       <div class="empty-to">Search the library above or add a blank item.<br>Then click the drawing to count or measure.</div>
     </div>
     <div class="grp-action" id="grp-action">
-      <span style="font-size:11px;color:var(--muted);flex:1">Group selected:</span>
-      <input id="grp-label" type="text" placeholder="Group / sheet name" style="flex:2;font-size:11px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;font-family:inherit"/>
-      <button class="btn sm primary" onclick="createGroup()">Group</button>
+      <span style="font-size:11px;color:var(--muted);flex:1">Assign selected to group:</span>
+      <button class="btn sm primary" onclick="createGroup()">+ Group</button>
     </div>
     <div class="push-bar">
       <button class="push-btn" id="push-btn" disabled onclick="openPush()">Push to Estimate</button>
@@ -309,6 +308,10 @@ tr:hover .dbtn{opacity:1}
     <div class="draw-toolbar">
       <button class="tbtn active" id="tbtn-pan" onclick="setTool('pan')">Pan</button>
       <button class="tbtn" id="tbtn-select" onclick="setTool('select')">Select</button>
+      <div style="display:flex;align-items:center;gap:4px;margin-left:4px">
+        <span style="font-size:10px;color:var(--muted)">Size</span>
+        <input type="range" id="marker-size" min="4" max="24" value="8" step="1" style="width:60px;cursor:pointer" oninput="markerSize=parseInt(this.value);redraw()"/>
+      </div>
       <div class="tsep"></div>
       <span style="font-size:10px;color:var(--muted);white-space:nowrap;flex-shrink:0">Scale:</span>
       <select class="tsel" id="scale-sel" onchange="onScaleSel()">
@@ -550,6 +553,38 @@ tr:hover .dbtn{opacity:1}
   </div>
 </div>
 
+<div class="mo" id="assign-mo" style="display:none" onclick="if(event.target===this)closeMo('assign-mo')">
+  <div class="md" style="max-width:380px;width:92%">
+    <h3>Assign to Group</h3>
+    <label>New group name</label>
+    <input id="assign-group-name" type="text" placeholder="e.g. Feeders, Lighting..."/>
+    <div class="md-act" style="margin-bottom:10px">
+      <button class="btn" onclick="closeMo('assign-mo')">Cancel</button>
+      <button class="btn primary" onclick="createNewGroupFromAssign()">Create new group</button>
+    </div>
+    <div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px">Or add to existing group</div>
+    <div id="assign-existing-list" style="border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;max-height:180px;overflow-y:auto"></div>
+  </div>
+</div>
+
+<div class="mo" id="new-est-mo" style="display:none" onclick="if(event.target===this)closeMo('new-est-mo')">
+  <div class="md" style="max-width:360px;width:92%">
+    <h3>New Estimate</h3>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:10px">Fill in project details to create a new linked estimate.</p>
+    <label>Project name *</label>
+    <input id="new-est-name" type="text" placeholder="Project name"/>
+    <label>Client / GC</label>
+    <input id="new-est-client" type="text" placeholder="Client name"/>
+    <label>Estimate #</label>
+    <input id="new-est-num" type="text" placeholder="e.g. E-2024-001"/>
+    <div class="md-act">
+      <button class="btn" onclick="closeMo('new-est-mo')">Cancel</button>
+      <button class="btn primary" onclick="confirmNewEstimate()">Create</button>
+    </div>
+  </div>
+</div>
+
+
 <div class="mo" id="color-mo" style="display:none" onclick="if(event.target===this)closeMo('color-mo')">
   <div class="md">
     <h3>Choose Color</h3>
@@ -664,13 +699,30 @@ let zoom=1.0;
 let scaleRaw=null, scaleUnit='ft', scaleLabel='';
 
 let activeTool='pan';
-let activeGrpIdx=null;
-let hiddenGroups=new Set();
-let groups=[];
+
+// ── Takeoff data model ──
+// items: flat list of takeoff entries
+// userGroups: named organizational buckets {id, name, color}
+// Each item has an optional groupId
+let items=[];          // [{id, name, lib, color, groupId, markups:[{type,pts,value,unit,normPxD,page}], checked}]
+let userGroups=[];     // [{id, name, color}]
+let activeItemIdx=null;
+let hiddenItems=new Set();   // item ids
 let gci=0;
+
+// ── Legacy compat shim so hit-test / redraw still works ──
+// redraw reads groups[], so we expose a computed view
+function getGroups(){
+  return items.map((it,i)=>({
+    id:it.id, name:it.name, color:it.color,
+    items: it.markups, lib:it.lib,
+    checked:it.checked
+  }));
+}
 
 // canvas drawing state
 let isDrawing=false, curPts=[], calPts=[];
+let markerSize=8; // base size, scaled by zoom in draw functions
 // select tool state: {gi, ii, ptIdx} or null
 let selectedMarker=null;
 let _selectDragging=false, _selectDragStart=null;
@@ -789,7 +841,7 @@ function updateThumbMarkers(){
   for(let i=1;i<=(pdfDoc?pdfDoc.numPages:0);i++){
     const el=$('thumb-pg-'+i);
     if(!el) continue;
-    el.classList.toggle('marked', groups.some(g=>g.items.some(it=>it.page===i)));
+    el.classList.toggle('marked', items.some(it=>it.markups.some(m=>m.page===i)));
   }
 }
 
@@ -934,16 +986,15 @@ function recalcAllMeasurements(){
   const sc=getScale();
   if(!sc) return;
   const oc=$('oc');
-  groups.forEach(grp=>{
-    grp.items.forEach(it=>{
-      if(it.type==='linear'){
-        // support both old pxDist and new normPxD
+  items.forEach(item=>{
+    item.markups.forEach(m=>{
+      if(m.type==='linear'){
         let pxD=null;
-        if(it.normPxD!=null) pxD=it.normPxD*oc.width;
-        else if(it.pxDist!=null) pxD=it.pxDist;
+        if(m.normPxD!=null) pxD=m.normPxD*oc.width;
+        else if(m.pxDist!=null) pxD=m.pxDist;
         if(pxD!=null){
-          it.value=pxD/sc;
-          it.unit=scaleUnit;
+          m.value=pxD/sc;
+          m.unit=scaleUnit;
         }
       }
     });
@@ -1000,24 +1051,27 @@ function libSearch(q){
   el.style.display='block';
 }
 
+// ── Add item from library ──
 function selectItem(code){
-  const item=LIBRARY.find(x=>x.code===code);
-  if(!item) return;
+  const libItem=LIBRARY.find(x=>x.code===code);
+  if(!libItem) return;
   $('lsi').value='';
   $('lsr').style.display='none';
-  const gid='g_'+code;
-  let gi=groups.findIndex(g=>g.id===gid);
-  if(gi===-1){
-    groups.push({id:gid,name:item.code+' - '+item.description,lib:item,color:GRP_COLORS[gci++%GRP_COLORS.length],custom:false,items:[],checked:false});
-    gi=groups.length-1;
+  // Check if item already exists (same code)
+  let idx=items.findIndex(it=>it.lib.code===code&&!it.lib.custom);
+  if(idx===-1){
+    const iid='i_'+code+'_'+Date.now();
+    items.push({id:iid,name:libItem.code+' - '+libItem.description,lib:libItem,color:GRP_COLORS[gci++%GRP_COLORS.length],groupId:null,markups:[],checked:false});
+    idx=items.length-1;
   }
-  setActiveGroup(gi);
-  const isLinear=['ft','m','lf'].includes((item.unit||'').toLowerCase());
+  activeItemIdx=idx;
+  const isLinear=['ft','m','lf'].includes((libItem.unit||'').toLowerCase());
   setTool(isLinear?'measure':'count',true);
   renderGroups();
-  toast('Active: '+item.code+' — '+(isLinear?'draw runs':'click to count'));
+  toast('Active: '+libItem.code+' — '+(isLinear?'draw runs':'click to count'));
 }
 
+// ── Add blank custom item ──
 function addBlankGroup(){
   $('blank-mo').style.display='flex';
   setTimeout(()=>$('blank-desc').focus(),50);
@@ -1026,18 +1080,16 @@ function confirmBlank(){
   const desc=$('blank-desc').value.trim()||'Custom Item';
   const unit=$('blank-unit').value;
   closeMo('blank-mo');
-  const gid='g_custom_'+Date.now();
+  const iid='i_custom_'+Date.now();
   const isLinear=['ft','m'].includes(unit);
-  groups.push({id:gid,name:desc,lib:{code:'',description:desc,unit,mat_unit:0,labour_unit:0,category:'Custom'},color:GRP_COLORS[gci++%GRP_COLORS.length],custom:true,items:[],checked:false});
-  const gi=groups.length-1;
-  setActiveGroup(gi);
+  items.push({id:iid,name:desc,lib:{code:'',description:desc,unit,mat_unit:0,labour_unit:0,category:'Custom'},color:GRP_COLORS[gci++%GRP_COLORS.length],groupId:null,markups:[],checked:false,custom:true});
+  activeItemIdx=items.length-1;
   setTool(isLinear?'measure':'count',true);
   renderGroups();
 }
 
-function setActiveGroup(gi){
-  activeGrpIdx=gi;
-}
+function setActiveGroup(gi){ activeItemIdx=gi; } // legacy compat
+
 
 // ─── Canvas coordinate helpers ───
 // Store ALL points as normalised fractions (0-1) relative to canvas size.
@@ -1059,18 +1111,18 @@ function toCvArr(pts){ return pts.map(toCanvas); }
 // Returns {gi, ii, ptIdx} or null. HIT_R in canvas pixels.
 const HIT_R = 14;
 function hitTest(cvPt){
-  for(let gi=groups.length-1;gi>=0;gi--){
-    if(hiddenGroups.has(groups[gi].id)) continue;
-    const grp=groups[gi];
-    const items=grp.items.filter(it=>it.page===curPage);
-    for(let ii=0;ii<items.length;ii++){
-      const it=items[ii];
-      // find original index in grp.items
-      const origIdx=grp.items.indexOf(it);
-      const cvPts=toCvArr(it.pts);
+  for(let idx=items.length-1;idx>=0;idx--){
+    const item=items[idx];
+    if(hiddenItems.has(item.id)) continue;
+    if(item.groupId && hiddenItems.has(item.groupId+'_group')) continue;
+    const pageMarkups=item.markups.filter(m=>m.page===curPage);
+    for(let mi=0;mi<pageMarkups.length;mi++){
+      const m=pageMarkups[mi];
+      const origMi=item.markups.indexOf(m);
+      const cvPts=toCvArr(m.pts);
       for(let pi=0;pi<cvPts.length;pi++){
         const dx=cvPts[pi].x-cvPt.x, dy=cvPts[pi].y-cvPt.y;
-        if(Math.sqrt(dx*dx+dy*dy)<=HIT_R) return{gi,ii:origIdx,ptIdx:pi};
+        if(Math.sqrt(dx*dx+dy*dy)<=HIT_R) return{gi:idx,ii:origMi,ptIdx:pi};
       }
     }
   }
@@ -1103,8 +1155,8 @@ function cvd(e){
     // check if clicking the × delete badge on selected marker
     if(selectedMarker){
       const {gi,ii,ptIdx}=selectedMarker;
-      const grp=groups[gi];
-      const it=grp&&grp.items[ii];
+      const grp=items[gi];
+      const it=grp&&grp.markups[ii];
       if(it&&it.page===curPage&&it.pts[ptIdx]){
         const cp=toCanvas(it.pts[ptIdx]);
         const bdx=cvPt.x-(cp.x+9), bdy=cvPt.y-(cp.y-9);
@@ -1139,8 +1191,8 @@ function cvm(e){
   // select tool drag-to-move
   if(activeTool==='select'&&_selectDragging&&selectedMarker){
     const {gi,ii,ptIdx}=selectedMarker;
-    const grp=groups[gi];
-    const it=grp&&grp.items[ii];
+    const grp=items[gi];
+    const it=grp&&grp.markups[ii];
     if(it&&it.pts[ptIdx]){
       it.pts[ptIdx]=pt; // update normalised position
       // if linear, recalc distance
@@ -1212,10 +1264,10 @@ function cvu(e){
 
   const pt=getCvPt(e);
   if(activeTool==='count'){
-    if(activeGrpIdx===null){toast('Select or add an item first');mousedownPos=null;return;}
+    if(activeItemIdx===null){toast('Select or add an item first');mousedownPos=null;return;}
     addCount(pt);
   } else if(activeTool==='measure'){
-    if(activeGrpIdx===null){toast('Select or add an item first');mousedownPos=null;return;}
+    if(activeItemIdx===null){toast('Select or add an item first');mousedownPos=null;return;}
     if(!scaleRaw){
       $('scale-warn').classList.add('show');
       mousedownPos=null; return;
@@ -1237,7 +1289,7 @@ document.addEventListener('keydown',e=>{
     if(isDrawing){isDrawing=false;curPts=[];redraw();}
     selectedMarker=null; _selectDragging=false;
     setTool('pan');
-    activeGrpIdx=null;
+    activeItemIdx=null;
     renderGroups();
     $('scale-warn').classList.remove('show');
   }
@@ -1255,11 +1307,10 @@ function finishMeasure(){
   const pxD=totD(cvPts);
   const val=sc?pxD/sc:pxD;
   const unit=sc?scaleUnit:'px';
-  const grp=groups[activeGrpIdx];
-  // store normalised pts; store pxDist as fraction of canvas width so recalc works across zooms
+  const item=items[activeItemIdx];
   const oc=$('oc');
-  const normPxD=pxD/oc.width; // store as fraction of canvas width at render scale
-  grp.items.push({type:'linear',value:val,unit,pts:[...curPts],page:curPage,normPxD});
+  const normPxD=pxD/oc.width;
+  item.markups.push({type:'linear',value:val,unit,pts:[...curPts],page:curPage,normPxD});
   isDrawing=false; curPts=[];
   $('ltip').style.display='none';
   renderGroups();
@@ -1269,160 +1320,195 @@ function finishMeasure(){
 
 // ─── Count ───
 function addCount(pt){
-  const grp=groups[activeGrpIdx];
-  let it=grp.items.find(x=>x.type==='count'&&x.page===curPage);
+  const item=items[activeItemIdx];
+  let it=item.markups.find(x=>x.type==='count'&&x.page===curPage);
   if(it){it.pts.push(pt);it.value=it.pts.length;}
-  else{grp.items.push({type:'count',value:1,unit:grp.lib.unit||'ea',pts:[pt],page:curPage});}
+  else{item.markups.push({type:'count',value:1,unit:item.lib.unit||'ea',pts:[pt],page:curPage});}
   renderGroups();
   updateThumbMarkers();
   redraw();
 }
 
 // ─── Render groups ───
+// ── Render the takeoff items panel ──
 function renderGroups(){
   const el=$('to-scroll');
-  const anyChecked=groups.some(g=>g.checked);
-  $('grp-action').classList.toggle('show',anyChecked);
+  const anyChecked=items.some(it=>it.checked);
+  $('grp-action').classList.toggle('show', anyChecked);
 
-  if(!groups.length){
+  if(!items.length){
     el.innerHTML='<div class="empty-to">Search the library above or add a blank item.<br>Then click the drawing to count or measure.</div>';
     updatePushBtn(); return;
   }
-  el.innerHTML=groups.map((grp,gi)=>{
-    const tot=grpTot(grp);
-    const isActive=gi===activeGrpIdx;
-    const isHidden=hiddenGroups.has(grp.id);
-    const eyeIcon=isHidden?'&#9651;':'&#9711;'; // open circle = visible, triangle = hidden
-    const rows=grp.items.map((it,ii)=>`
-      <div class="toi">
-        <span class="toi-dot" style="background:${grp.color}"></span>
-        <div class="toi-info">
-          <div class="toi-n">${it.type==='linear'?'Run - pg.'+it.page:'Count - pg.'+it.page}</div>
-          <div class="toi-s">${it.type==='linear'?fmtDist(it.value,it.unit):it.value+' ea'}</div>
-        </div>
-        <div class="toi-v">${it.type==='linear'?fmtDist(it.value,it.unit):it.value+'x'}</div>
-        <button class="toi-del" onclick="delItem(${gi},${ii},event)">x</button>
-      </div>`).join('');
-    const emptyRow=`<div style="padding:5px 9px;font-size:11px;color:var(--muted);font-style:italic">No items yet - click drawing to add</div>`;
-    return `<div class="tog">
-      <div class="tog-hdr${isActive?' selected':''}" onclick="clickGrpHdr(${gi},event)">
-        <span class="tog-arr open" id="arr-${gi}">&#9654;</span>
-        <span class="tog-swatch" style="background:${grp.color}" onclick="openColorPicker(${gi},event)" title="Change color"></span>
-        <span class="tog-name" title="${esc(grp.name)}">${esc(grp.name)}</span>
-        <span class="tog-cnt">${tot.display}</span>
-        <button class="tog-vis" onclick="toggleVis(${gi},event)" title="${isHidden?'Show':'Hide'}">${eyeIcon}</button>
-        <input type="checkbox" class="tog-chk" ${grp.checked?'checked':''} onclick="toggleCheck(${gi},event)" title="Select for grouping"/>
-        <button class="tog-vis" onclick="deleteGroup(${gi},event)" title="Delete group" style="color:var(--danger);opacity:.5">&#10005;</button>
+
+  // Build display: userGroups as sections, ungrouped at top
+  let html='';
+
+  // Ungrouped items
+  const ungrouped=items.filter(it=>!it.groupId);
+  if(ungrouped.length){
+    html+=`<div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;padding:5px 8px 2px;border-bottom:1px solid var(--border)">Ungrouped</div>`;
+    html+=ungrouped.map(it=>renderItemCard(it, items.indexOf(it))).join('');
+  }
+
+  // User-defined groups
+  userGroups.forEach(ug=>{
+    const ugItems=items.filter(it=>it.groupId===ug.id);
+    const isHidden=hiddenItems.has(ug.id+'_group');
+    const totalMarkups=ugItems.reduce((s,it)=>s+it.markups.filter(m=>m.page===curPage).length,0);
+    html+=`<div class="tog" id="ug-${ug.id}">
+      <div class="tog-hdr" onclick="toggleUGCollapse('${ug.id}')">
+        <span class="tog-arr open" id="ugarr-${ug.id}">&#9654;</span>
+        <span class="tog-swatch" style="background:${ug.color}"></span>
+        <span class="tog-name">${esc(ug.name)}</span>
+        <span class="tog-cnt">${ugItems.length} item${ugItems.length!==1?'s':''}</span>
+        <button class="tog-vis" onclick="event.stopPropagation();toggleUGVis('${ug.id}')" title="${isHidden?'Show':'Hide'}">${isHidden?'&#9651;':'&#9711;'}</button>
+        <button class="tog-vis" onclick="event.stopPropagation();deleteUserGroup('${ug.id}')" title="Delete group" style="color:var(--danger);opacity:.6">&#10005;</button>
       </div>
-      <div class="tog-body open" id="body-${gi}">${rows||emptyRow}</div>
+      <div class="tog-body open" id="ugbody-${ug.id}">
+        ${ugItems.length ? ugItems.map(it=>renderItemCard(it, items.indexOf(it))).join('') : '<div style="padding:5px 9px;font-size:11px;color:var(--muted);font-style:italic">No items in group</div>'}
+      </div>
     </div>`;
-  }).join('');
+  });
+
+  el.innerHTML=html;
   updatePushBtn();
 }
 
-function grpTot(grp){
-  if(!grp.items.length) return{qty:0,display:'0',unit:grp.lib.unit||'ea'};
-  if(grp.items[0]?.type==='count'){
-    const c=grp.items.reduce((s,it)=>s+it.value,0);
-    return{qty:c,display:c+' ea',unit:'ea'};
-  }
-  const t=grp.items.reduce((s,it)=>s+it.value,0);
-  const u=grp.items[0]?.unit||'ft';
-  return{qty:t,display:fmtDist(t,u),unit:u};
+function renderItemCard(it, idx){
+  const isActive=idx===activeItemIdx;
+  const totalMarkups=it.markups.filter(m=>m.page===curPage).length;
+  const allMarkups=it.markups.length;
+  const isHidden=hiddenItems.has(it.id);
+  return `<div class="tog${isActive?' active-item':''}">
+    <div class="tog-hdr${isActive?' selected':''}" onclick="clickItemHdr(${idx},event)">
+      <span class="tog-swatch" style="background:${it.color}" onclick="openColorPickerItem(${idx},event)" title="Change color"></span>
+      <span class="tog-name" title="${esc(it.name)}">${esc(it.name)}</span>
+      <span class="tog-cnt">${allMarkups} mk${totalMarkups!==allMarkups?' (pg:'+totalMarkups+')':''}</span>
+      <input type="checkbox" class="tog-chk" ${it.checked?'checked':''} onclick="toggleItemCheck(${idx},event)" title="Select"/>
+      <button class="tog-vis" onclick="toggleItemVis(${idx},event)" title="${isHidden?'Show':'Hide'}">${isHidden?'&#9651;':'&#9711;'}</button>
+      <button class="tog-vis" onclick="deleteItem(${idx},event)" title="Delete item" style="color:var(--danger);opacity:.6">&#10005;</button>
+    </div>
+    <div class="tog-body open" id="ibody-${it.id}">
+      ${it.markups.map((m,mi)=>`
+        <div class="toi">
+          <span class="toi-dot" style="background:${it.color}"></span>
+          <div class="toi-info">
+            <div class="toi-n">${m.type==='linear'?'Run - pg.'+m.page:'Count - pg.'+m.page}</div>
+            <div class="toi-s">${m.type==='linear'?fmtDist(m.value,m.unit):m.value+' ea'}</div>
+          </div>
+          <div class="toi-v">${m.type==='linear'?fmtDist(m.value,m.unit):m.value+'x'}</div>
+          <button class="toi-del" onclick="delMarkup(${idx},${mi},event)">x</button>
+        </div>`).join('') || '<div style="padding:4px 9px;font-size:11px;color:var(--muted);font-style:italic">Click drawing to add</div>'}
+    </div>
+  </div>`;
 }
 
-function clickGrpHdr(gi,e){
+function clickItemHdr(idx,e){
   if(e.target.classList.contains('tog-vis')||e.target.classList.contains('tog-chk')||e.target.classList.contains('tog-swatch')) return;
-  const body=$('body-'+gi), arr=$('arr-'+gi);
-  if(gi===activeGrpIdx){
-    body.classList.toggle('open'); arr.classList.toggle('open');
+  if(idx===activeItemIdx){
+    const it=items[idx];
+    const body=it?$('ibody-'+it.id):null;
+    if(body) body.classList.toggle('open');
   } else {
-    setActiveGroup(gi);
-    const grp=groups[gi];
-    const isLinear=['ft','m','lf'].includes((grp.lib.unit||'').toLowerCase());
+    activeItemIdx=idx;
+    const it=items[idx];
+    const isLinear=['ft','m','lf'].includes((it.lib.unit||'').toLowerCase());
     setTool(isLinear?'measure':'count',true);
     renderGroups();
-    toast('Active: '+grp.name);
+    toast('Active: '+it.name);
   }
 }
 
-function toggleVis(gi,e){
+function toggleItemCheck(idx,e){
   e.stopPropagation();
-  const id=groups[gi].id;
-  if(hiddenGroups.has(id)) hiddenGroups.delete(id); else hiddenGroups.add(id);
+  items[idx].checked=e.target.checked;
+  renderGroups();
+}
+
+function toggleItemVis(idx,e){
+  e.stopPropagation();
+  const id=items[idx].id;
+  if(hiddenItems.has(id)) hiddenItems.delete(id); else hiddenItems.add(id);
   renderGroups(); redraw();
 }
 
-function toggleCheck(gi,e){
+function deleteItem(idx,e){
   e.stopPropagation();
-  groups[gi].checked=e.target.checked;
+  items.splice(idx,1);
+  if(activeItemIdx>=items.length) activeItemIdx=items.length-1;
+  if(activeItemIdx<0) activeItemIdx=null;
+  renderGroups(); updateThumbMarkers(); redraw();
+}
+
+function delMarkup(idx,mi,e){
+  e.stopPropagation();
+  items[idx].markups.splice(mi,1);
+  renderGroups(); updateThumbMarkers(); redraw();
+}
+
+function toggleUGCollapse(ugId){
+  const body=$('ugbody-'+ugId), arr=$('ugarr-'+ugId);
+  if(body) body.classList.toggle('open');
+  if(arr) arr.classList.toggle('open');
+}
+
+function toggleUGVis(ugId){
+  const key=ugId+'_group';
+  if(hiddenItems.has(key)) hiddenItems.delete(key); else hiddenItems.add(key);
+  renderGroups(); redraw();
+}
+
+function deleteUserGroup(ugId){
+  // Ungroup items
+  items.forEach(it=>{ if(it.groupId===ugId) it.groupId=null; });
+  userGroups=userGroups.filter(ug=>ug.id!==ugId);
   renderGroups();
 }
 
-function delItem(gi,ii,e){
-  e.stopPropagation();
-  groups[gi].items.splice(ii,1);
-  renderGroups(); updateThumbMarkers(); redraw();
-}
-
-function deleteGroup(gi,e){
-  e.stopPropagation();
-  groups.splice(gi,1);
-  if(activeGrpIdx>=groups.length) activeGrpIdx=groups.length-1;
-  if(activeGrpIdx<0) activeGrpIdx=null;
-  renderGroups(); updateThumbMarkers(); redraw();
-}
-
-function deleteMarkerPoint(gi,ii,ptIdx){
-  const grp=groups[gi];
-  const it=grp&&grp.items[ii];
-  if(!it) return;
-  if(it.type==='count'){
-    it.pts.splice(ptIdx,1);
-    it.value=it.pts.length;
-    if(!it.pts.length) grp.items.splice(ii,1);
-  } else if(it.type==='linear'){
-    it.pts.splice(ptIdx,1);
-    if(it.pts.length<1){
-      grp.items.splice(ii,1);
-    } else {
-      // recalc distance
-      const sc=getScale();
-      const oc=$('oc');
-      const cvPts=toCvArr(it.pts);
-      const pxD=totD(cvPts);
-      it.normPxD=pxD/oc.width;
-      if(sc){it.value=pxD/sc;it.unit=scaleUnit;}
-    }
+function grpTot(grpOrItem){
+  // works on both old group objects and new item objects
+  const markups=grpOrItem.markups||grpOrItem.items||[];
+  const lib=grpOrItem.lib||{};
+  if(!markups.length) return{qty:0,display:'0',unit:lib.unit||'ea'};
+  if(markups[0]?.type==='count'){
+    const c=markups.reduce((s,m)=>s+m.value,0);
+    return{qty:c,display:c+' ea',unit:'ea'};
   }
-  selectedMarker=null;
-  renderGroups(); updateThumbMarkers(); redraw();
+  const t=markups.reduce((s,m)=>s+m.value,0);
+  const u=markups[0]?.unit||'ft';
+  return{qty:t,display:fmtDist(t,u),unit:u};
 }
 
-function clearAll(){
-  if(!groups.length) return;
-  if(!confirm('Clear all markups?')) return;
-  groups=[]; activeGrpIdx=null; hiddenGroups.clear();
-  renderGroups(); redraw(); updateThumbMarkers();
-}
-
-// ─── Group action (checkbox grouping) ───
+// ── Group action: assign selected items to a group ──
 function createGroup(){
-  const label=$('grp-label').value.trim()||('Group '+(nextSid));
-  const checked=groups.filter(g=>g.checked);
+  const checked=items.filter(it=>it.checked);
   if(!checked.length) return;
-  // create a new sheet for this group
-  const sheetName=label;
-  const existIdx=sheets.findIndex(s=>s.name===sheetName);
-  if(existIdx===-1){
-    sheets.push({id:nextSid++,name:sheetName,rows:[]});
-  }
-  // uncheck all
-  groups.forEach(g=>g.checked=false);
-  $('grp-label').value='';
-  renderGroups();
-  toast('Group "'+label+'" created as sheet');
+  // Show group picker modal
+  $('assign-group-name').value='';
+  $('assign-existing-list').innerHTML=userGroups.length
+    ? userGroups.map(ug=>`<div onclick="assignToGroup('${ug.id}')" style="padding:8px 12px;cursor:pointer;font-size:13px;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border)" onmouseover="this.style.background='var(--bg2)'" onmouseout="this.style.background=''"><span style="width:10px;height:10px;border-radius:50%;background:${ug.color};display:inline-block;flex-shrink:0"></span>${esc(ug.name)}</div>`).join('')
+    : '<div style="font-size:12px;color:var(--muted);padding:10px 12px">No groups yet — create one above</div>';
+  $('assign-mo').style.display='flex';
+  setTimeout(()=>$('assign-group-name').focus(),50);
 }
+
+function assignToGroup(ugId){
+  items.forEach(it=>{ if(it.checked){ it.groupId=ugId; it.checked=false; } });
+  $('grp-label').value='';
+  closeMo('assign-mo');
+  renderGroups();
+  toast('Items added to group');
+}
+
+function createNewGroupFromAssign(){
+  const name=$('assign-group-name').value.trim()||('Group '+nextSid);
+  const ugId='ug_'+Date.now();
+  const color=GRP_COLORS[userGroups.length%GRP_COLORS.length];
+  userGroups.push({id:ugId,name,color});
+  assignToGroup(ugId);
+}
+
 
 // ─── Color picker ───
 function openColorPicker(gi,e){
@@ -1430,11 +1516,11 @@ function openColorPicker(gi,e){
   colorTargetIdx=gi;
   const grid=$('color-grid');
   grid.innerHTML=ALL_COLORS.map(c=>`
-    <div class="color-swatch${groups[gi].color===c?' selected':''}" style="background:${c}" onclick="pickColor('${c}')"></div>`).join('');
+    <div class="color-swatch${items[gi]&&items[gi].color===c?' selected':''}" style="background:${c}" onclick="pickColor('${c}')"></div>`).join('');
   $('color-mo').style.display='flex';
 }
 function pickColor(c){
-  if(colorTargetIdx!==null) groups[colorTargetIdx].color=c;
+  if(colorTargetIdx!==null && items[colorTargetIdx]) items[colorTargetIdx].color=c;
   closeMo('color-mo');
   renderGroups(); redraw();
 }
@@ -1446,13 +1532,15 @@ function redraw(livePt){
   const ctx=oc.getContext('2d');
   ctx.clearRect(0,0,oc.width,oc.height);
 
-  groups.forEach((grp,gi)=>{
-    if(hiddenGroups.has(grp.id)) return;
-    const isActive=gi===activeGrpIdx;
-    grp.items.filter(it=>it.page===curPage).forEach(it=>{
-      const cvPts=toCvArr(it.pts);
-      if(it.type==='linear') drawLine(ctx,cvPts,grp.color,fmtDist(it.value,it.unit),false,isActive);
-      if(it.type==='count') drawDots(ctx,cvPts,grp.color,isActive);
+  items.forEach((item,idx)=>{
+    if(hiddenItems.has(item.id)) return;
+    // also hide if its group is hidden
+    if(item.groupId && hiddenItems.has(item.groupId+'_group')) return;
+    const isActive=idx===activeItemIdx;
+    item.markups.filter(m=>m.page===curPage).forEach(m=>{
+      const cvPts=toCvArr(m.pts);
+      if(m.type==='linear') drawLine(ctx,cvPts,item.color,fmtDist(m.value,m.unit),false,isActive);
+      if(m.type==='count') drawDots(ctx,cvPts,item.color,isActive);
     });
   });
 
@@ -1475,20 +1563,20 @@ function redraw(livePt){
   // Highlight selected marker
   if(selectedMarker){
     const {gi,ii,ptIdx}=selectedMarker;
-    const grp=groups[gi];
-    if(grp){
-      const it=grp.items[ii];
+    const item=items[gi];
+    if(item){
+      const it=item.markups[ii];
       if(it&&it.page===curPage&&it.pts[ptIdx]){
         const cp=toCanvas(it.pts[ptIdx]);
         ctx.save();
         ctx.strokeStyle='#fff'; ctx.lineWidth=3;
         ctx.beginPath(); ctx.arc(cp.x,cp.y,11,0,Math.PI*2); ctx.stroke();
-        ctx.strokeStyle=grp.color; ctx.lineWidth=2;
+        ctx.strokeStyle=item.color; ctx.lineWidth=2;
         ctx.beginPath(); ctx.arc(cp.x,cp.y,11,0,Math.PI*2); ctx.stroke();
         // delete hint
-        ctx.fillStyle='#fff'; ctx.strokeStyle=grp.color; ctx.lineWidth=1.5;
+        ctx.fillStyle='#fff'; ctx.strokeStyle=item.color; ctx.lineWidth=1.5;
         ctx.beginPath(); ctx.arc(cp.x+9,cp.y-9,7,0,Math.PI*2); ctx.fill(); ctx.stroke();
-        ctx.fillStyle=grp.color; ctx.font='bold 10px sans-serif';
+        ctx.fillStyle=item.color; ctx.font='bold 10px sans-serif';
         ctx.textAlign='center'; ctx.textBaseline='middle';
         ctx.fillText('×',cp.x+9,cp.y-9);
         ctx.restore();
@@ -1499,16 +1587,17 @@ function redraw(livePt){
 
 function drawLine(ctx,pts,color,label,inProg,isActive){
   if(!pts||pts.length<1) return;
-  if(pts.length===1){ctx.fillStyle=color;ctx.beginPath();ctx.arc(pts[0].x,pts[0].y,4,0,Math.PI*2);ctx.fill();return;}
+  const dotR=Math.max(3, (markerSize/2.5) * Math.sqrt(zoom)) * (isActive?1.3:1);
+  if(pts.length===1){ctx.fillStyle=color;ctx.beginPath();ctx.arc(pts[0].x,pts[0].y,dotR,0,Math.PI*2);ctx.fill();return;}
   ctx.strokeStyle=color;
-  ctx.lineWidth=isActive?3:2;
+  ctx.lineWidth=isActive?Math.max(2,dotR*0.6):Math.max(1.5,dotR*0.4);
   ctx.setLineDash(inProg?[5,4]:[]);
   ctx.lineCap='round';ctx.lineJoin='round';
   ctx.beginPath();ctx.moveTo(pts[0].x,pts[0].y);
   pts.slice(1).forEach(p=>ctx.lineTo(p.x,p.y));
   ctx.stroke();ctx.setLineDash([]);
   ctx.fillStyle=color;
-  [pts[0],pts[pts.length-1]].forEach(p=>{ctx.beginPath();ctx.arc(p.x,p.y,isActive?5:3,0,Math.PI*2);ctx.fill();});
+  [pts[0],pts[pts.length-1]].forEach(p=>{ctx.beginPath();ctx.arc(p.x,p.y,dotR,0,Math.PI*2);ctx.fill();});
   if(label&&!inProg){
     const mp=pts[Math.floor((pts.length-1)/2)];
     ctx.save();
@@ -1525,11 +1614,11 @@ function drawLine(ctx,pts,color,label,inProg,isActive){
 }
 
 function drawDots(ctx,pts,color,isActive){
+  const r=Math.max(6, markerSize * Math.sqrt(zoom)) * (isActive?1.25:1);
   pts.forEach((p,i)=>{
-    const r=isActive?10:8;
     ctx.fillStyle=color;ctx.strokeStyle='rgba(255,255,255,0.9)';ctx.lineWidth=1.5;
     ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.fill();ctx.stroke();
-    ctx.fillStyle='#fff';ctx.font=`bold ${isActive?10:9}px -apple-system,sans-serif`;
+    ctx.fillStyle='#fff';ctx.font=`bold ${Math.max(8,r*0.9)}px -apple-system,sans-serif`;
     ctx.textAlign='center';ctx.textBaseline='middle';
     ctx.fillText(i+1,p.x,p.y);
   });
@@ -1580,13 +1669,13 @@ async function confirmLink(){
 
 function updatePushBtn(){
   const btn=$('push-btn'), sum=$('push-sum');
-  const hasItems=groups.some(g=>g.items.length>0);
-  btn.disabled=!linked||!hasItems;
+  const hasMarkups=items.some(it=>it.markups.length>0);
+  btn.disabled=!linked||!hasMarkups;
   if(!linked) sum.textContent='Link an estimate to enable';
-  else if(!hasItems) sum.textContent='No items to push yet';
+  else if(!hasMarkups) sum.textContent='No items to push yet';
   else {
-    const n=groups.filter(g=>g.items.length>0).length;
-    sum.textContent=n+' group'+(n>1?'s':'')+' ready';
+    const n=items.filter(it=>it.markups.length>0).length;
+    sum.textContent=n+' item'+(n!==1?'s':'')+' ready';
   }
 }
 
@@ -1595,43 +1684,84 @@ function openPush(){
   if(!linked) return;
   const sel=$('push-sheet');
   sel.innerHTML=(linked.sheets||[]).map((s,i)=>`<option value="${i}">${esc(s.name)}</option>`).join('');
-  // Build review list
-  const pushable=groups.filter(g=>g.items.length>0);
+
+  const withMarkups=items.filter(it=>it.markups.length>0);
+  const ungrouped=withMarkups.filter(it=>!it.groupId);
   const ref=$('push-ref').value.trim()||pdfFilename||'Drawing';
-  $('push-review').innerHTML=pushable.length?pushable.map(grp=>{
-    const tot=grpTot(grp);
-    return `<div style="display:flex;align-items:center;gap:8px;padding:7px 10px;border-bottom:1px solid var(--border)">
-      <span style="width:10px;height:10px;border-radius:50%;background:${grp.color};flex-shrink:0;display:inline-block"></span>
-      <span style="flex:1;font-weight:500">${esc(grp.name)}</span>
-      <span style="color:var(--muted)">${tot.display}</span>
+
+  let html='';
+  // Show grouped items
+  userGroups.forEach(ug=>{
+    const ugItems=withMarkups.filter(it=>it.groupId===ug.id);
+    if(!ugItems.length) return;
+    html+=`<div style="padding:5px 10px;background:var(--bg2);font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid var(--border)">
+      <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${ug.color};margin-right:5px"></span>
+      ${esc(ug.name)} → sheet
     </div>`;
-  }).join(''):'<div style="padding:10px;color:var(--muted);font-style:italic">No items to push</div>';
+    ugItems.forEach(it=>{
+      const tot=grpTot(it);
+      html+=`<div style="display:flex;align-items:center;gap:8px;padding:5px 16px;border-bottom:1px solid #f5f4f0;font-size:12px">
+        <span style="flex:1">${esc(it.name)}</span>
+        <span style="color:var(--muted)">${tot.display}</span>
+      </div>`;
+    });
+  });
+  // Show ungrouped with warning
+  if(ungrouped.length){
+    html+=`<div style="padding:5px 10px;background:var(--amber-bg);font-size:11px;font-weight:700;color:var(--amber);border-bottom:1px solid var(--border)">
+      &#9888; Ungrouped items → "Ungrouped" sheet
+    </div>`;
+    ungrouped.forEach(it=>{
+      const tot=grpTot(it);
+      html+=`<div style="display:flex;align-items:center;gap:8px;padding:5px 16px;border-bottom:1px solid #f5f4f0;font-size:12px">
+        <span style="flex:1">${esc(it.name)}</span>
+        <span style="color:var(--muted)">${tot.display}</span>
+      </div>`;
+    });
+  }
+  if(!html) html='<div style="padding:10px;color:var(--muted);font-style:italic;font-size:12px">No items with markups to push</div>';
+  $('push-review').innerHTML=html;
   $('push-mo').style.display='flex';
 }
 
 async function confirmPush(){
-  const idx=parseInt($('push-sheet').value);
   const ref=$('push-ref').value.trim()||pdfFilename||'Drawing';
-  const sheet=linked.sheets[idx];
-  if(!sheet){toast('Invalid sheet');return;}
+  const withMarkups=items.filter(it=>it.markups.length>0);
+  if(!withMarkups.length){toast('No items to push');return;}
 
-  const pushable=groups.filter(g=>g.items.length>0);
-  if(!pushable.length){toast('No items to push');return;}
+  // Build sheets: one per userGroup + one "Ungrouped" if needed
+  const sheetsToCreate=[];
+  userGroups.forEach(ug=>{
+    const ugItems=withMarkups.filter(it=>it.groupId===ug.id);
+    if(!ugItems.length) return;
+    sheetsToCreate.push({name:ug.name, items:ugItems});
+  });
+  const ungrouped=withMarkups.filter(it=>!it.groupId);
+  if(ungrouped.length) sheetsToCreate.push({name:'Ungrouped', items:ungrouped});
 
-  pushable.forEach(grp=>{
-    const lib=grp.lib;
-    const tot=grpTot(grp);
-    let qty=tot.qty;
-    if(tot.unit==='m'&&(lib.unit||'').toLowerCase()==='ft') qty=qty/0.3048;
-    sheet.rows.push({
-      code: lib.code||'',
-      description: lib.description,
-      unit: lib.unit||tot.unit,
-      mat_unit: lib.mat_unit||0,
-      labour_unit: lib.labour_unit||0,
-      qty: parseFloat(qty.toFixed(2)),
-      notes: ref,
-      category: lib.category||'Custom'
+  if(!sheetsToCreate.length){toast('No items to push');return;}
+
+  // Add or update sheets in the linked estimate
+  sheetsToCreate.forEach(({name, items:sheetItems})=>{
+    let sheet=linked.sheets.find(s=>s.name===name);
+    if(!sheet){
+      sheet={id:Date.now()+Math.random(),name,rows:[]};
+      linked.sheets.push(sheet);
+    }
+    sheetItems.forEach(it=>{
+      const tot=grpTot(it);
+      let qty=tot.qty;
+      if(tot.unit==='m'&&(it.lib.unit||'').toLowerCase()==='ft') qty=qty/0.3048;
+      sheet.rows.push({
+        code: it.lib.code||'',
+        description: it.lib.description||it.name,
+        unit: it.lib.unit||tot.unit,
+        mat_unit: it.lib.mat_unit||0,
+        labour_unit: it.lib.labour_unit||0,
+        qty: parseFloat(qty.toFixed(2)),
+        notes: ref,
+        category: it.lib.category||'Custom'
+      });
     });
   });
 
@@ -1642,14 +1772,38 @@ async function confirmPush(){
     await r.json();
     sheets=JSON.parse(JSON.stringify(linked.sheets));
     closeMo('push-mo');
-    toast(`Pushed ${pushable.length} item${pushable.length!==1?'s':''} to ${sheet.name}`);
+    const warn=ungrouped.length?' (warning: ungrouped items in "Ungrouped" sheet)':'';
+    toast(`Pushed ${sheetsToCreate.length} sheet${sheetsToCreate.length!==1?'s':''}${warn}`);
   }catch(err){toast('Push failed: '+err.message);}
 }
 
+
 async function newEstimateFromDrawings(){
-  const name = $('pf-name').value.trim() || 'New Estimate';
+  const name = $('pf-name').value.trim();
   const client = $('pf-client').value.trim();
   const estimateNum = $('pf-num').value.trim();
+  if(!name){
+    // Show a small prompt modal
+    $('new-est-mo').style.display='flex';
+    setTimeout(()=>$('new-est-name').focus(),50);
+    return;
+  }
+  await _doCreateEstimate(name, client, estimateNum);
+}
+
+async function confirmNewEstimate(){
+  const name=$('new-est-name').value.trim()||'New Estimate';
+  const client=$('new-est-client').value.trim();
+  const num=$('new-est-num').value.trim();
+  // Also sync back to topbar fields
+  $('pf-name').value=name;
+  $('pf-client').value=client;
+  $('pf-num').value=num;
+  closeMo('new-est-mo');
+  await _doCreateEstimate(name, client, num);
+}
+
+async function _doCreateEstimate(name, client, estimateNum){
   const newEst = {
     name, client, estimateNum,
     sheets:[{id:1,name:'Sheet 1',rows:[]}],
