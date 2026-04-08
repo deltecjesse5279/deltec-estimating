@@ -263,7 +263,7 @@ select.filter-active{border-color:var(--amber);background:#fffbf2}
   </div>
   <div class="app-tabs">
     <div class="app-tab active">Estimating</div>
-    <a class="app-tab" id="drawings-link" href="#" target="_blank">Drawings</a>
+    <a class="app-tab" id="drawings-link" href="/drawings.html" target="_blank">Drawings</a>
   </div>
   <div class="topbar-right">
     <span class="save-indicator" id="save-ind"></span>
@@ -925,7 +925,7 @@ const LIBRARY = [{"code":"EMT-3/4-N","description":"3/4\" EMT Conduit \u2013 Nor
 
 const CATS = [...new Set(LIBRARY.map(i=>i.category))].sort();
 // Update this URL when the Drawings app is deployed
-const DRAWINGS_URL = '';
+const DRAWINGS_URL = '/drawings.html';
 
 // Custom library items (user-added)
 let customLibrary = JSON.parse(localStorage.getItem('deltec_custom_lib') || '[]');
