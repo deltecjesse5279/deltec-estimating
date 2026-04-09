@@ -237,6 +237,8 @@ tr:hover .dbtn{opacity:1}
 .scale-warn.show{display:block}
 .scale-warn p{font-size:13px;color:var(--text);margin-bottom:10px}
 
+/* marquee drag-select */
+.marquee{position:absolute;border:1.5px dashed #1a4f8a;background:rgba(26,79,138,.08);pointer-events:none;z-index:5;}
 /* toast */
 .toast{position:fixed;bottom:18px;right:18px;background:#1a1a18;color:#fff;padding:9px 14px;border-radius:var(--radius);font-size:13px;z-index:600;opacity:0;transition:opacity .2s;pointer-events:none}
 .toast.show{opacity:1}
@@ -253,7 +255,7 @@ tr:hover .dbtn{opacity:1}
     <input id="pf-num" placeholder="Estimate #" oninput="syncFields('num',this.value)"/>
   </div>
   <div class="app-tabs">
-    <a class="app-tab" href="/">Estimating</a>
+    <a class="app-tab" href="/" onclick="return navToApp('/')">Estimating</a>
     <div class="app-tab active">Drawings</div>
   </div>
   <div class="topbar-right">
@@ -308,6 +310,7 @@ tr:hover .dbtn{opacity:1}
     <div class="draw-toolbar">
       <button class="tbtn active" id="tbtn-pan" onclick="setTool('pan')">Pan</button>
       <button class="tbtn" id="tbtn-select" onclick="setTool('select')">Select</button>
+      <button class="tbtn" id="tbtn-drag-sel" onclick="setTool('drag-sel')" title="Drag to select multiple items">Drag Sel</button>
       <div style="display:flex;align-items:center;gap:4px;margin-left:4px">
         <span style="font-size:10px;color:var(--muted)">Size</span>
         <input type="range" id="marker-size" min="4" max="24" value="8" step="1" style="width:60px;cursor:pointer" oninput="markerSize=parseInt(this.value);redraw()"/>
@@ -379,6 +382,8 @@ tr:hover .dbtn{opacity:1}
       <div class="zdsp" id="zdsp">100%</div>
       <button class="tbtn" onclick="doZoom(0.15)">+</button>
       <button class="tbtn" onclick="fitPage()">Fit</button>
+      <div class="tsep"></div>
+      <button class="tbtn" onclick="exportDrawing()" title="Export marked-up drawing">Export</button>
     </div>
 
     <!-- canvas viewport -->
@@ -522,8 +527,6 @@ tr:hover .dbtn{opacity:1}
     <p style="font-size:12px;color:var(--muted);margin-bottom:10px">Each group below will be pushed as a sheet row into the target estimate sheet. Review before confirming.</p>
     <label>Drawing reference</label>
     <input id="push-ref" type="text" placeholder="e.g. E1.0"/>
-    <label style="margin-top:8px;display:block">Target sheet</label>
-    <select id="push-sheet"></select>
     <label style="margin-top:10px;display:block;font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">Items to push</label>
     <div id="push-review" style="margin-top:6px;max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;font-size:12px"></div>
     <div class="md-act">
@@ -736,6 +739,8 @@ let activeSheet=0, nextSid=2;
 
 // color picker target
 let colorTargetIdx=null;
+// drag-select marquee state
+let _marqStart=null, _marqRect=null, _marqEl=null;
 
 // ─── Helpers ───
 function $(id){return document.getElementById(id);}
@@ -912,9 +917,9 @@ function cvwh(e){
 // ─── Tools ───
 function setTool(t, silent){
   activeTool=t;
-  ['pan','select'].forEach(n=>$('tbtn-'+n)?.classList.toggle('active',n===t));
+  ['pan','select','drag-sel'].forEach(n=>$('tbtn-'+n)?.classList.toggle('active',n===t));
   const wrap=$('cvw');
-  wrap.className='cv-wrap'+(t==='measure'?' tool-measure':t==='count'?' tool-count':t==='cal'?' tool-cal':t==='select'?' tool-select':'');
+  wrap.className='cv-wrap'+(t==='measure'?' tool-measure':t==='count'?' tool-count':t==='cal'?' tool-cal':t==='select'?' tool-select':t==='drag-sel'?' tool-drag-sel':'');
   curPts=[]; isDrawing=false;
   selectedMarker=null;
   if(!silent) redraw();
@@ -1180,6 +1185,13 @@ function cvd(e){
     }
     return;
   }
+  if(activeTool==='drag-sel'){
+    const pt=getCvPt(e);
+    _marqStart=toCanvas(pt);
+    _marqRect=null;
+    intentDecided=true;
+    return;
+  }
   // count/measure: wait for mousemove
 }
 
@@ -1243,6 +1255,17 @@ function cvm(e){
     }
     redraw(pt); return;
   }
+  if(activeTool==='drag-sel'&&_marqStart){
+    const cvPt2=toCanvas(getCvPt(e));
+    const oc2=$('oc');
+    const r={x:Math.min(_marqStart.x,cvPt2.x),y:Math.min(_marqStart.y,cvPt2.y),
+              w:Math.abs(cvPt2.x-_marqStart.x),h:Math.abs(cvPt2.y-_marqStart.y)};
+    _marqRect=r;
+    // Draw marquee div overlay
+    if(!_marqEl){_marqEl=document.createElement('div');_marqEl.className='marquee';$('cv-spacer').appendChild(_marqEl);}
+    _marqEl.style.left=r.x+'px';_marqEl.style.top=r.y+'px';_marqEl.style.width=r.w+'px';_marqEl.style.height=r.h+'px';
+    return;
+  }
   if(activeTool==='cal'&&calPts.length===1){redraw(pt);return;}
   tip.style.display='none';
 }
@@ -1259,6 +1282,25 @@ function cvu(e){
     return;
   }
 
+  if(activeTool==='drag-sel'){
+    if(_marqEl){_marqEl.remove();_marqEl=null;}
+    if(_marqRect&&(_marqRect.w>5||_marqRect.h>5)){
+      // Select items whose markups on current page fall within marquee
+      const r=_marqRect;
+      items.forEach((item,idx)=>{
+        if(hiddenItems.has(item.id)) return;
+        const inMarq=item.markups.filter(m=>m.page===curPage).some(m=>m.pts.some(p=>{
+          const c=toCanvas(p);
+          return c.x>=r.x&&c.x<=r.x+r.w&&c.y>=r.y&&c.y<=r.y+r.h;
+        }));
+        if(inMarq) item.checked=true;
+      });
+      renderGroups();
+      toast('Items in selection checked');
+    }
+    _marqStart=null; _marqRect=null;
+    mousedownPos=null; return;
+  }
   if(activeTool==='pan'||activeTool==='cal'){mousedownPos=null;return;}
   if(isPanning){mousedownPos=null;return;}
 
@@ -1363,6 +1405,7 @@ function renderGroups(){
         <span class="tog-name">${esc(ug.name)}</span>
         <span class="tog-cnt">${ugItems.length} item${ugItems.length!==1?'s':''}</span>
         <button class="tog-vis" onclick="event.stopPropagation();toggleUGVis('${ug.id}')" title="${isHidden?'Show':'Hide'}">${isHidden?'&#9651;':'&#9711;'}</button>
+        <button class="tog-vis" onclick="event.stopPropagation();renameUserGroup('${ug.id}')" title="Rename group" style="opacity:.7">&#9998;</button>
         <button class="tog-vis" onclick="event.stopPropagation();deleteUserGroup('${ug.id}')" title="Delete group" style="color:var(--danger);opacity:.6">&#10005;</button>
       </div>
       <div class="tog-body open" id="ugbody-${ug.id}">
@@ -1459,6 +1502,22 @@ function toggleUGVis(ugId){
   renderGroups(); redraw();
 }
 
+function renameUserGroup(ugId){
+  const ug=userGroups.find(g=>g.id===ugId);
+  if(!ug) return;
+  const el=document.getElementById('ug-'+ugId);
+  const nameSpan=el&&el.querySelector('.tog-name');
+  const inp=document.createElement('input');
+  inp.type='text'; inp.value=ug.name;
+  inp.style.cssText='font-size:11px;font-weight:500;border:1px solid var(--amber);border-radius:4px;padding:1px 4px;width:110px;background:#fff;';
+  if(nameSpan){
+    nameSpan.replaceWith(inp);
+    inp.focus(); inp.select();
+    const commit=()=>{const v=inp.value.trim();if(v)ug.name=v;renderGroups();};
+    inp.addEventListener('blur',commit);
+    inp.addEventListener('keydown',e=>{if(e.key==='Enter')inp.blur();if(e.key==='Escape'){inp.value=ug.name;inp.blur();}});
+  }
+}
 function deleteUserGroup(ugId){
   // Ungroup items
   items.forEach(it=>{ if(it.groupId===ugId) it.groupId=null; });
@@ -1495,7 +1554,6 @@ function createGroup(){
 
 function assignToGroup(ugId){
   items.forEach(it=>{ if(it.checked){ it.groupId=ugId; it.checked=false; } });
-  $('grp-label').value='';
   closeMo('assign-mo');
   renderGroups();
   toast('Items added to group');
@@ -1511,6 +1569,7 @@ function createNewGroupFromAssign(){
 
 
 // ─── Color picker ───
+function openColorPickerItem(gi,e){return openColorPicker(gi,e);}
 function openColorPicker(gi,e){
   e.stopPropagation();
   colorTargetIdx=gi;
@@ -1661,6 +1720,7 @@ async function confirmLink(){
       sheets=JSON.parse(JSON.stringify(linked.sheets));
       activeSheet=0;
     }
+    if(linked.drawingsState){ applyDrawingsState(linked.drawingsState); }
     updatePushBtn();
     closeMo('link-mo');
     toast('Linked: '+linked.name);
@@ -1682,9 +1742,6 @@ function updatePushBtn(){
 // ─── Push to estimate ───
 function openPush(){
   if(!linked) return;
-  const sel=$('push-sheet');
-  sel.innerHTML=(linked.sheets||[]).map((s,i)=>`<option value="${i}">${esc(s.name)}</option>`).join('');
-
   const withMarkups=items.filter(it=>it.markups.length>0);
   const ungrouped=withMarkups.filter(it=>!it.groupId);
   const ref=$('push-ref').value.trim()||pdfFilename||'Drawing';
@@ -1748,6 +1805,8 @@ async function confirmPush(){
       sheet={id:Date.now()+Math.random(),name,rows:[]};
       linked.sheets.push(sheet);
     }
+    // Replace rows: clear existing rows for this sheet then rebuild
+    sheet.rows=[];
     sheetItems.forEach(it=>{
       const tot=grpTot(it);
       let qty=tot.qty;
@@ -1771,6 +1830,8 @@ async function confirmPush(){
     if(!r.ok) throw new Error('HTTP '+r.status);
     await r.json();
     sheets=JSON.parse(JSON.stringify(linked.sheets));
+    // Auto-persist drawings state after push
+    linked.drawingsState=getDrawingsState();
     closeMo('push-mo');
     const warn=ungrouped.length?' (warning: ungrouped items in "Ungrouped" sheet)':'';
     toast(`Pushed ${sheetsToCreate.length} sheet${sheetsToCreate.length!==1?'s':''}${warn}`);
@@ -1826,11 +1887,31 @@ async function _doCreateEstimate(name, client, estimateNum){
   }catch(err){toast('Could not create estimate: '+err.message);}
 }
 
+function getDrawingsState(){
+  return{
+    items: items.map(it=>({...it, markups:it.markups})),
+    userGroups,
+    scaleRaw, scaleUnit, scaleLabel,
+    curPage, zoom, markerSize,
+    pdfFilename
+  };
+}
+function applyDrawingsState(ds){
+  if(!ds) return;
+  if(ds.items) items=ds.items.map(it=>({...it, markups:it.markups||[], checked:false}));
+  if(ds.userGroups) userGroups=ds.userGroups;
+  if(ds.scaleRaw!=null){ scaleRaw=ds.scaleRaw; scaleUnit=ds.scaleUnit||'ft'; scaleLabel=ds.scaleLabel||''; }
+  if(ds.scaleLabel) setScaleInd(ds.scaleLabel);
+  if(ds.markerSize){ markerSize=ds.markerSize; $('marker-size').value=markerSize; }
+  if(ds.pdfFilename) pdfFilename=ds.pdfFilename;
+  renderGroups(); updatePushBtn();
+}
 async function saveLinked(){
   if(!linked){toast('No estimate linked');return;}
   linked.name=$('pf-name').value||linked.name;
   linked.client=$('pf-client').value||linked.client;
   linked.estimateNum=$('pf-num').value||linked.estimateNum;
+  linked.drawingsState=getDrawingsState();
   linked.updatedAt=new Date().toISOString();
   try{
     const r=await fetch('/api/estimates',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(linked)});
@@ -1918,10 +1999,33 @@ document.addEventListener('click',e=>{
 });
 
 // ─── Toast ───
+function navToApp(url){
+  // Same-tab navigation — no new tab
+  window.location.href=url;
+  return false;
+}
 function toast(msg){
   const t=$('toast');
   t.textContent=msg;t.classList.add('show');
   setTimeout(()=>t.classList.remove('show'),2500);
+}
+
+// ─── Export marked-up drawing ───
+function exportDrawing(){
+  if(!pdfDoc){toast('No drawing loaded');return;}
+  // Flatten: draw PDF page + overlay onto an off-screen canvas, then export PNG
+  const pc=$('pc'), oc=$('oc');
+  const flat=document.createElement('canvas');
+  flat.width=pc.width; flat.height=pc.height;
+  const ctx=flat.getContext('2d');
+  ctx.drawImage(pc,0,0);
+  ctx.drawImage(oc,0,0);
+  const url=flat.toDataURL('image/png');
+  const a=document.createElement('a');
+  a.href=url;
+  a.download=(pdfFilename||'drawing')+'-pg'+curPage+'-marked.png';
+  a.click();
+  toast('Exported page '+curPage);
 }
 
 // init
