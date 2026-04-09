@@ -16,26 +16,40 @@ let db = null;
 async function initStorage() {
   if (DATABASE_URL) {
     const { Client } = require('pg');
-    db = new Client({ connectionString: DATABASE_URL, ssl: { rejectUnauthorized: false } });
-    await db.connect();
-    await db.query(`
-      CREATE TABLE IF NOT EXISTS estimates (
-        id TEXT PRIMARY KEY,
-        data JSONB NOT NULL,
-        updated_at TIMESTAMPTZ DEFAULT NOW()
-      )
-    `);
-    console.log('Using PostgreSQL storage');
-  } else {
-    // Ensure data directory exists for file fallback
-    if (!fs.existsSync(path.join(__dirname, 'data'))) {
-      fs.mkdirSync(path.join(__dirname, 'data'));
+    const MAX_RETRIES = 5;
+    const RETRY_DELAY_MS = 3000;
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        db = new Client({ connectionString: DATABASE_URL, ssl: { rejectUnauthorized: false } });
+        await db.connect();
+        await db.query(`
+          CREATE TABLE IF NOT EXISTS estimates (
+            id TEXT PRIMARY KEY,
+            data JSONB NOT NULL,
+            updated_at TIMESTAMPTZ DEFAULT NOW()
+          )
+        `);
+        console.log('Using PostgreSQL storage');
+        return;
+      } catch (err) {
+        console.warn(`DB connect attempt ${attempt}/${MAX_RETRIES} failed: ${err.message}`);
+        db = null;
+        if (attempt < MAX_RETRIES) {
+          await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
+        } else {
+          console.warn('All DB connect attempts failed — falling back to file storage');
+        }
+      }
     }
-    if (!fs.existsSync(DATA_FILE)) {
-      fs.writeFileSync(DATA_FILE, JSON.stringify({}));
-    }
-    console.log('Using file storage (data/estimates.json)');
   }
+  // File fallback
+  if (!fs.existsSync(path.join(__dirname, 'data'))) {
+    fs.mkdirSync(path.join(__dirname, 'data'));
+  }
+  if (!fs.existsSync(DATA_FILE)) {
+    fs.writeFileSync(DATA_FILE, JSON.stringify({}));
+  }
+  console.log('Using file storage (data/estimates.json)');
 }
 
 async function readEstimates() {
@@ -146,6 +160,9 @@ initStorage().then(() => {
     console.log(`OnSite Estimating running on port ${PORT}`);
   });
 }).catch(err => {
-  console.error('Failed to initialise storage:', err);
-  process.exit(1);
+  console.error('Unexpected init error:', err);
+  // Start anyway on file storage
+  app.listen(PORT, () => {
+    console.log(`OnSite Estimating running on port ${PORT} (file storage fallback)`);
+  });
 });
