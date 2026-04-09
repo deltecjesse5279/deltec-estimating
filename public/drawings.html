@@ -808,12 +808,19 @@ function loadPDF(file){
       buildThumbs();
       renderPage(1);
       toast('Loaded: '+file.name);
-      // 27d: store PDF in sessionStorage for restore on platform switch
+      // Store PDF in localStorage for restore on platform switch/reload
       if(linked&&linked.id){
         try{
-          const b64=btoa(String.fromCharCode(...new Uint8Array(arrBuf)));
-          sessionStorage.setItem('onsite_pdf_'+linked.id,b64);
-        }catch(e){} // may exceed quota on very large PDFs — silent fail
+          const bytes=new Uint8Array(arrBuf);
+          let b64='';
+          const chunk=8192;
+          for(let i=0;i<bytes.length;i+=chunk){
+            b64+=String.fromCharCode(...bytes.subarray(i,i+chunk));
+          }
+          localStorage.setItem('onsite_pdf_'+linked.id,btoa(b64));
+        }catch(e){
+          console.warn('PDF too large for localStorage:',e.message);
+        }
       }
     }).catch(e=>toast('PDF error: '+e.message));
   };
@@ -1867,7 +1874,7 @@ async function confirmLink(){
     const b=$('proj-badge');
     b.textContent=linked.name||'Linked';
     b.className='proj-badge linked';
-    sessionStorage.setItem('onsite_linked_id', linked.id);
+    localStorage.setItem('onsite_active_id', linked.id);
     $('pf-name').value=linked.name||''; $('d-name').value=linked.name||'';
     $('pf-client').value=linked.client||''; $('d-client').value=linked.client||'';
     $('pf-num').value=linked.estimateNum||''; $('d-enum').value=linked.estimateNum||'';
@@ -1884,7 +1891,7 @@ async function confirmLink(){
       sheets=JSON.parse(JSON.stringify(linked.sheets));
       activeSheet=0;
     }
-    sessionStorage.setItem('onsite_linked_id',linked.id);
+    localStorage.setItem('onsite_active_id',linked.id);
     if(linked.drawingsState){ applyDrawingsState(linked.drawingsState); }
     updatePushBtn();
     closeMo('link-mo');
@@ -2051,7 +2058,7 @@ async function _doCreateEstimate(name, client, estimateNum){
     const b=$('proj-badge');
     b.textContent=linked.name;
     b.className='proj-badge linked';
-    sessionStorage.setItem('onsite_linked_id', linked.id);
+    localStorage.setItem('onsite_active_id', linked.id);
     updatePushBtn();
     toast('Created & linked: '+linked.name);
   }catch(err){toast('Could not create estimate: '+err.message);}
@@ -2203,14 +2210,35 @@ function exportDrawing(){
 
 // init
 renderTO();
-// Auto-open last active estimate
+// Auto-open last active estimate (most recently updated on server)
 (async function autoOpenEst(){
-  const id=sessionStorage.getItem('onsite_linked_id');
-  if(!id) return;
   try{
-    const r=await fetch('/api/estimates/'+id);
-    if(!r.ok) return;
-    linked=await r.json();
+    // First try the locally cached ID for speed
+    const cachedId=localStorage.getItem('onsite_active_id');
+    let estId=cachedId;
+    if(!estId){
+      // Fall back to most recently updated estimate from server
+      const listR=await fetch('/api/estimates');
+      if(!listR.ok) return;
+      const list=await listR.json();
+      if(!list.length) return;
+      estId=list[0].id; // API returns sorted by updatedAt desc
+    }
+    const r=await fetch('/api/estimates/'+estId);
+    if(!r.ok){
+      // Cached ID stale — try most recent from server
+      if(cachedId){
+        const listR=await fetch('/api/estimates');
+        if(!listR.ok) return;
+        const list=await listR.json();
+        if(!list.length) return;
+        const r2=await fetch('/api/estimates/'+list[0].id);
+        if(!r2.ok) return;
+        linked=await r2.json();
+      } else return;
+    } else {
+      linked=await r.json();
+    }
     const b=$('proj-badge');
     b.textContent=linked.name||'Linked';
     b.className='proj-badge linked';
@@ -2230,9 +2258,30 @@ renderTO();
       sheets=JSON.parse(JSON.stringify(linked.sheets));
       activeSheet=0;
     }
-    sessionStorage.setItem('onsite_linked_id',linked.id);
+    localStorage.setItem('onsite_active_id',linked.id);
     if(linked.drawingsState){ applyDrawingsState(linked.drawingsState); }
     updatePushBtn();
+    // Restore PDF from localStorage
+    const pdfKey='onsite_pdf_'+linked.id;
+    const pdfData=localStorage.getItem(pdfKey);
+    if(pdfData){
+      try{
+        const binary=atob(pdfData);
+        const arr=new Uint8Array(binary.length);
+        for(let i=0;i<binary.length;i++) arr[i]=binary.charCodeAt(i);
+        pdfjsLib.getDocument({data:arr.buffer}).promise.then(pdf=>{
+          pdfDoc=pdf;
+          $('cv-empty').style.display='none';
+          $('uz').style.display='none';
+          buildThumbs();
+          const pg=(linked.drawingsState&&linked.drawingsState.curPage)||1;
+          renderPage(pg);
+          toast('Restored: '+linked.name);
+        }).catch(()=>{ toast('Restored: '+linked.name+' (re-upload PDF)'); });
+      }catch(e){ toast('Restored: '+linked.name+' (re-upload PDF)'); }
+    } else {
+      toast('Restored: '+linked.name+(linked.drawingsState?' (re-upload PDF)':''));
+    }
   }catch(e){ /* silent fail */ }
 })();
 </script>
