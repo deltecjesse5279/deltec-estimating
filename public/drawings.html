@@ -394,6 +394,11 @@ tr:hover .dbtn{opacity:1}
       <button class="tbtn" onclick="fitPage()">Fit</button>
       <div class="tsep"></div>
       <button class="tbtn" onclick="exportDrawing()" title="Export marked-up drawing">Export</button>
+      <div class="tsep" id="sel-act-sep" style="display:none"></div>
+      <span id="sel-act-label" style="font-size:10px;color:var(--muted);display:none;white-space:nowrap"></span>
+      <button class="tbtn" id="sel-act-move" style="display:none" onclick="selPtsMoveModal()">Move</button>
+      <button class="tbtn" id="sel-act-dup" style="display:none" onclick="selPtsDuplicate()">Duplicate</button>
+      <button class="tbtn danger" id="sel-act-del" style="display:none;color:var(--danger)" onclick="selPtsDelete()">Delete</button>
     </div>
 
     <!-- canvas viewport -->
@@ -597,6 +602,24 @@ tr:hover .dbtn{opacity:1}
   </div>
 </div>
 
+
+<div class="mo" id="move-pts-mo" style="display:none" onclick="if(event.target===this)closeMo('move-pts-mo')">
+  <div class="md" style="width:320px">
+    <h3>Move selected points</h3>
+    <p>Choose a destination takeoff item.</p>
+    <div style="display:flex;flex-direction:column;gap:3px;max-height:240px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius);margin-bottom:10px" id="move-item-list"></div>
+    <div style="border-top:1px solid var(--border);padding-top:8px;margin-top:2px">
+      <label style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;display:block;margin-bottom:5px">Or create new item</label>
+      <div style="display:flex;gap:6px">
+        <input id="move-new-name" type="text" placeholder="New item name..." style="flex:1;font-size:12px;padding:5px 7px;border:1px solid var(--border);border-radius:var(--radius);font-family:inherit"/>
+        <button class="btn sm primary" onclick="selPtsMoveToNew()">Create &amp; Move</button>
+      </div>
+    </div>
+    <div class="md-act" style="margin-top:10px">
+      <button class="btn" onclick="closeMo('move-pts-mo')">Cancel</button>
+    </div>
+  </div>
+</div>
 
 <div class="mo" id="color-mo" style="display:none" onclick="if(event.target===this)closeMo('color-mo')">
   <div class="md">
@@ -1373,7 +1396,7 @@ document.addEventListener('keydown',e=>{
   if(e.key==='Escape'){
     if(isDrawing){isDrawing=false;curPts=[];redraw();}
     selectedMarker=null; _selectDragging=false;
-    if(_selPts.length){_selPts=[];$('selpts-bar').style.display='none';redraw();}
+    if(_selPts.length){_selPts=[];showSelPtsBar();redraw();}
     setTool('pan');
     activeItemIdx=null;
     renderGroups();
@@ -1382,6 +1405,14 @@ document.addEventListener('keydown',e=>{
   if(e.key==='Enter'){
     if(activeTool==='measure'&&isDrawing&&curPts.length>=2) finishMeasure();
     else if(activeTool==='count'){toast('Count saved');setTool('pan');}
+  }
+  if((e.key==='Delete'||e.key==='Backspace')&&!e.target.matches('input,textarea')){
+    if(selectedMarker){
+      const {gi,ii,ptIdx}=selectedMarker;
+      deleteMarkerPoint(gi,ii,ptIdx);
+    } else if(_selPts.length){
+      selPtsDelete();
+    }
   }
 });
 
@@ -1541,6 +1572,25 @@ function delMarkup(idx,mi,e){
   renderGroups(); updateThumbMarkers(); redraw();
 }
 
+function deleteMarkerPoint(gi,ii,ptIdx){
+  const item=items[gi]; if(!item) return;
+  const m=item.markups[ii]; if(!m) return;
+  m.pts.splice(ptIdx,1);
+  if(m.type==='count') m.value=m.pts.length;
+  if(m.type==='linear'){
+    // recalc distance
+    const sc=getScale();
+    const cvPts=toCvArr(m.pts);
+    const pxD=totD(cvPts);
+    const ocEl=$('oc');
+    m.normPxD=ocEl.width?pxD/ocEl.width:0;
+    if(sc){m.value=pxD/sc;m.unit=scaleUnit;}
+  }
+  if(m.pts.length===0) item.markups.splice(ii,1);
+  selectedMarker=null;
+  renderGroups(); updateThumbMarkers(); redraw();
+}
+
 function toggleUGCollapse(ugId){
   if(_collapsedGroups.has(ugId)) _collapsedGroups.delete(ugId);
   else _collapsedGroups.add(ugId);
@@ -1554,14 +1604,23 @@ function toggleUGVis(ugId){
 }
 
 function showSelPtsBar(){
+  const n=_selPts.length;
+  const hasSel=n>0;
+  const label=n+' pt'+(n!==1?'s':'')+' selected';
+  // Panel bar
   const bar=$('selpts-bar');
-  if(!_selPts.length){bar.style.display='none';return;}
-  bar.style.display='flex';
-  $('selpts-label').textContent=_selPts.length+' point'+(_selPts.length!==1?'s':'')+' selected';
+  if(bar){bar.style.display=hasSel?'flex':'none';}
+  if($('selpts-label')) $('selpts-label').textContent=label;
+  // Toolbar context buttons
+  ['sel-act-sep','sel-act-label','sel-act-move','sel-act-dup','sel-act-del'].forEach(id=>{
+    const el=$(id); if(el) el.style.display=hasSel?'':'none';
+  });
+  if($('sel-act-label')) $('sel-act-label').textContent=label;
 }
+function updateSelPtsBar(){ showSelPtsBar(); }
 function clearSelPts(){
   _selPts=[];
-  $('selpts-bar').style.display='none';
+  updateSelPtsBar();
   redraw();
 }
 function selPtsDelete(){
@@ -1581,7 +1640,7 @@ function selPtsDelete(){
     }
   });
   _selPts=[];
-  $('selpts-bar').style.display='none';
+  showSelPtsBar();
   renderGroups(); updateThumbMarkers(); redraw();
   toast('Deleted selected points');
 }
@@ -1604,20 +1663,23 @@ function selPtsDuplicate(){
     else{item.markups.push({type:'count',value:1,unit:item.lib.unit||'ea',pts:[pt],page:curPage});}
   });
   _selPts=[];
-  $('selpts-bar').style.display='none';
+  showSelPtsBar();
   renderGroups(); updateThumbMarkers(); redraw();
   toast('Duplicated '+newPts.length+' point'+(newPts.length!==1?'s':''));
 }
-function selPtsMove(){
+function selPtsMoveModal(){
   if(!_selPts.length) return;
-  const listStr=items.map((it,i)=>i+': '+it.name).join(', ');
-  const name=prompt('Move to item (number or name): '+listStr);
-  if(name===null) return;
-  let targetIdx=parseInt(name);
-  if(isNaN(targetIdx)){
-    targetIdx=items.findIndex(it=>it.name.toLowerCase().includes(name.toLowerCase()));
-  }
-  if(targetIdx<0||targetIdx>=items.length){toast('Item not found');return;}
+  const list=$('move-item-list');
+  list.innerHTML=items.map((it,i)=>`
+    <div onclick="selPtsMoveToIdx(${i})" style="padding:7px 10px;cursor:pointer;font-size:12px;display:flex;align-items:center;gap:7px;border-bottom:1px solid #f0efeb" onmouseover="this.style.background='var(--bg2)'" onmouseout="this.style.background=''">
+      <span style="width:9px;height:9px;border-radius:50%;background:${it.color};display:inline-block;flex-shrink:0"></span>
+      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(it.name)}</span>
+    </div>`).join('');
+  $('move-new-name').value='';
+  $('move-pts-mo').style.display='flex';
+}
+function _doMovePtsToIdx(targetIdx){
+  if(targetIdx<0||targetIdx>=items.length) return;
   _selPts.forEach(({itemIdx,markupIdx,ptIdx,isLinear})=>{
     if(isLinear) return;
     const item=items[itemIdx]; if(!item) return;
@@ -1636,9 +1698,23 @@ function selPtsMove(){
     if(!m.pts.length) item.markups.splice(markupIdx,1);
   });
   _selPts=[];
-  $('selpts-bar').style.display='none';
+  showSelPtsBar();
   renderGroups(); updateThumbMarkers(); redraw();
-  toast('Points moved');
+  toast('Moved to: '+items[targetIdx].name);
+}
+function selPtsMoveToIdx(targetIdx){
+  closeMo('move-pts-mo');
+  _doMovePtsToIdx(targetIdx);
+}
+function selPtsMoveToNew(){
+  const name=$('move-new-name').value.trim();
+  if(!name){$('move-new-name').focus();return;}
+  closeMo('move-pts-mo');
+  const first=_selPts[0];
+  const srcItem=first&&items[first.itemIdx];
+  const lib=srcItem?{...srcItem.lib,code:'',description:name}:{code:'',description:name,unit:'ea',mat_unit:0,labour_unit:0,category:'Custom'};
+  items.push({id:'i_custom_'+Date.now(),name,lib,color:GRP_COLORS[gci++%GRP_COLORS.length],groupId:null,markups:[],checked:false,custom:true});
+  _doMovePtsToIdx(items.length-1);
 }
 
 function renameUserGroup(ugId){
@@ -1760,35 +1836,23 @@ function redraw(livePt){
 
   // Highlight drag-selected points
   if(_selPts.length){
-    const oc2=$('oc');
-    const ctx2=oc2.getContext('2d');
+    const ctx2=oc.getContext('2d');
     _selPts.forEach(({itemIdx,markupIdx,ptIdx,isLinear})=>{
       const item=items[itemIdx]; if(!item) return;
       const m=item.markups[markupIdx]; if(!m||m.page!==curPage) return;
-      if(isLinear) return;
-      const p=m.pts[ptIdx]; if(!p) return;
-      const c=toCanvas(p);
-      ctx2.save();
-      ctx2.strokeStyle='#1a4f8a'; ctx2.lineWidth=2.5;
-      ctx2.beginPath(); ctx2.arc(c.x,c.y,14,0,Math.PI*2); ctx2.stroke();
-      ctx2.restore();
+      const pts2=isLinear?m.pts:[m.pts[ptIdx]].filter(Boolean);
+      pts2.forEach(p=>{
+        const c=toCanvas(p);
+        ctx2.save();
+        ctx2.strokeStyle='#1a4f8a'; ctx2.lineWidth=3;
+        ctx2.beginPath(); ctx2.arc(c.x,c.y,16,0,Math.PI*2); ctx2.stroke();
+        // white inner ring for contrast
+        ctx2.strokeStyle='rgba(255,255,255,0.7)'; ctx2.lineWidth=1.5;
+        ctx2.beginPath(); ctx2.arc(c.x,c.y,16,0,Math.PI*2); ctx2.stroke();
+        ctx2.restore();
+      });
     });
   }
-  // Highlight drag-selected points
-  if(_selectedPts.length){
-    const ctx2=oc.getContext('2d');
-    _selectedPts.forEach(({gi,mi,pi})=>{
-      const item=items[gi];
-      const m=item&&item.markups[mi];
-      if(!m||m.page!==curPage||!m.pts[pi]) return;
-      const cp=toCanvas(m.pts[pi]);
-      ctx2.save();
-      ctx2.strokeStyle='#1a4f8a';ctx2.lineWidth=2.5;
-      ctx2.beginPath();ctx2.arc(cp.x,cp.y,14,0,Math.PI*2);ctx2.stroke();
-      ctx2.restore();
-    });
-  }
-
   // Highlight selected marker
   if(selectedMarker){
     const {gi,ii,ptIdx}=selectedMarker;
