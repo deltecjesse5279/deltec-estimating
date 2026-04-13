@@ -897,17 +897,11 @@ select.filter-active{border-color:var(--amber);background:#fffbf2}
       <div id="bom-sheet-checkboxes" style="display:flex;flex-direction:column;gap:6px"></div>
     </div>
 
-    <!-- Include options as card-style toggles -->
-    <div style="margin-bottom:18px">
-      <div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">Include in header</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px" id="pdf-include-grid">
-        <div class="export-toggle-btn active" id="inc-name-lbl" onclick="toggleExportInclude('name',this)">Project name</div>
-        <div class="export-toggle-btn active" id="inc-client-lbl" onclick="toggleExportInclude('client',this)">Client / GC</div>
-        <div class="export-toggle-btn active" id="inc-num-lbl" onclick="toggleExportInclude('num',this)">Estimate #</div>
-        <div class="export-toggle-btn active" id="inc-date-lbl" onclick="toggleExportInclude('date',this)">Date</div>
-        <div class="export-toggle-btn active" id="inc-tax-lbl" onclick="toggleExportInclude('tax',this)">Tax lines</div>
-        <div class="export-toggle-btn active" id="inc-grand-lbl" onclick="toggleExportInclude('grand',this)">Grand total</div>
-      </div>
+    <!-- Cost Breakout line toggles — populated dynamically from config -->
+    <div style="margin-bottom:18px" id="bk-toggle-section">
+      <div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">Cost Breakout lines</div>
+      <div style="font-size:11px;color:var(--muted);margin-bottom:8px">Choose which lines appear in the exported cost breakdown.</div>
+      <div style="display:flex;flex-direction:column;gap:4px" id="bk-toggle-grid"></div>
     </div>
     </div><!-- end scrollable area -->
 
@@ -3558,6 +3552,8 @@ function selectExportView(view){
     const el = $('view-'+v+'-lbl');
     if(el) el.classList.toggle('active', v===view);
   });
+  const bkSec = $('bk-toggle-section');
+  if(bkSec) bkSec.style.display = view==='field' ? 'none' : '';
 }
 
 function exportPDF(){
@@ -3573,7 +3569,44 @@ function exportPDF(){
   }
   const bomSel = $('bom-sheet-selector');
   if(bomSel) bomSel.style.display = 'none';
+  // Populate cost breakout toggles from live config
+  populateBkToggles();
   $('pdf-modal').style.display='flex';
+}
+
+function populateBkToggles(){
+  const cfg = getBreakoutConfig();
+  const grid = $('bk-toggle-grid');
+  if(!grid) return;
+  grid.innerHTML = '';
+  cfg.buckets.forEach(bucket => {
+    // Bucket header row (always shown, non-toggleable)
+    const bucketRow = document.createElement('div');
+    bucketRow.style.cssText = 'font-size:11px;font-weight:600;color:var(--muted);padding:4px 0 2px;border-top:1px solid var(--border);margin-top:2px';
+    bucketRow.textContent = bucket.label;
+    grid.appendChild(bucketRow);
+    // Child toggles
+    (bucket.children||[]).forEach(child => {
+      if(!child.visible) return; // only show currently-visible lines
+      const btn = document.createElement('div');
+      btn.className = 'export-toggle-btn active';
+      btn.dataset.bkId = bucket.id + '|' + child.id;
+      btn.style.cssText = 'margin-left:12px;font-size:11px;padding:5px 10px';
+      btn.textContent = child.label;
+      btn.onclick = function(){ this.classList.toggle('active'); };
+      grid.appendChild(btn);
+    });
+    // "Final Amount" after TOTAL bucket
+    if(bucket.id === 'TOTAL'){
+      const finalBtn = document.createElement('div');
+      finalBtn.className = 'export-toggle-btn active';
+      finalBtn.dataset.bkId = 'FINAL|amount';
+      finalBtn.style.cssText = 'font-size:11px;font-weight:600;padding:5px 10px;margin-top:2px';
+      finalBtn.textContent = 'Final Amount';
+      finalBtn.onclick = function(){ this.classList.toggle('active'); };
+      grid.appendChild(finalBtn);
+    }
+  });
 }
 
 function closePdfModal(){
@@ -3583,14 +3616,21 @@ function closePdfModal(){
 function confirmExportPDF(){
   const exportFmt = _exportFmt;
   const view = _exportView;
-  const isInc = key => { const el=$('inc-'+key+'-lbl'); return !el || el.classList.contains('active'); };
+  // Read which breakout lines are toggled on
+  const bkToggles = {};
+  document.querySelectorAll('#bk-toggle-grid .export-toggle-btn').forEach(btn => {
+    bkToggles[btn.dataset.bkId] = btn.classList.contains('active');
+  });
+  const isBkOn = (bucketId, childId) => {
+    const key = bucketId + '|' + childId;
+    return !(key in bkToggles) || bkToggles[key]; // default on if not in grid
+  };
+  const showFinalAmt = isBkOn('FINAL', 'amount');
+  // Legacy inclFields kept for BoM format compatibility
   const inclFields = {
-    projectName: isInc('name'),
-    client:      isInc('client'),
-    estimateNum: isInc('num'),
-    date:        isInc('date'),
-    taxLines:    isInc('tax'),
-    grandTotal:  isInc('grand'),
+    projectName: true, client: true, estimateNum: true, date: true,
+    taxLines: isBkOn('TOTAL','tot_gst') || isBkOn('TOTAL','tot_pst'),
+    grandTotal: showFinalAmt,
   };
   closePdfModal();
 
@@ -3746,8 +3786,8 @@ function confirmExportPDF(){
         else if(bucket.id==='SUBTOTAL') base=(bucketTotals['MATERIAL']||0)+(bucketTotals['LABOUR']||0);
         else if(bucket.id==='TOTAL') base=bucketTotals['SUBTOTAL']||0;
 
-        const visChildren = (bucket.children||[]).filter(c=>c.visible);
-        // Skip LABOUR detail for client view
+        // Intersect: line must be both config-visible AND toggled on in export modal
+        const visChildren = (bucket.children||[]).filter(c=>c.visible && isBkOn(bucket.id, c.id));
         const showChildren = view==='office' || bucket.id==='MATERIAL' || bucket.id==='SUBTOTAL' || bucket.id==='TOTAL';
         const bucketTotal = bucketTotals[bucket.id];
 
@@ -3785,13 +3825,15 @@ function confirmExportPDF(){
         }
       });
 
-      // Final row
-      const frow=bkTable.insertRow();
-      frow.style.cssText='border-top:2px solid #1a1a18;-webkit-print-color-adjust:exact;print-color-adjust:exact';
-      const fc=frow.insertCell(); fc.style.cssText='padding:6px 8px;font-weight:700;font-size:12px';
-      fc.textContent='Final Amount';
-      const fv=frow.insertCell(); fv.style.cssText='padding:6px 8px;text-align:right;font-weight:700;font-size:13px;color:#2d6b1f';
-      fv.textContent=fmt(final);
+      // Final row (only if toggled on)
+      if(showFinalAmt){
+        const frow=bkTable.insertRow();
+        frow.style.cssText='border-top:2px solid #1a1a18;-webkit-print-color-adjust:exact;print-color-adjust:exact';
+        const fc=frow.insertCell(); fc.style.cssText='padding:6px 8px;font-weight:700;font-size:12px';
+        fc.textContent='Final Amount';
+        const fv=frow.insertCell(); fv.style.cssText='padding:6px 8px;text-align:right;font-weight:700;font-size:13px;color:#2d6b1f';
+        fv.textContent=fmt(final);
+      }
 
       bkDiv.appendChild(bkTable);
       printDiv.appendChild(bkDiv);
