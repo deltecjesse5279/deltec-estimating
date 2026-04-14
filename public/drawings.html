@@ -820,12 +820,17 @@ function switchMain(name){
 async function savePdfToServer(estId){
   if(!pdfRawBytes||!estId) return;
   try{
-    await fetch('/api/estimates/'+estId+'/pdf',{
+    const r=await fetch('/api/estimates/'+estId+'/pdf',{
       method:'POST',
       headers:{'Content-Type':'application/pdf'},
       body:pdfRawBytes
     });
-  }catch(e){ console.warn('PDF server upload failed:',e.message); }
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    console.log('PDF uploaded to server ('+(pdfRawBytes.byteLength/1024).toFixed(0)+'KB)');
+  }catch(e){
+    console.warn('PDF server upload failed:',e.message);
+    toast('PDF save failed — will restore from local cache');
+  }
   // Also cache locally as fast fallback
   savePdfToLocalStorage(estId);
 }
@@ -847,7 +852,8 @@ function loadPDF(file){
   const r=new FileReader();
   r.onload=e=>{
     const arrBuf=e.target.result;
-    pdfRawBytes=arrBuf;
+    // Keep our own copy BEFORE pdf.js detaches the ArrayBuffer
+    pdfRawBytes=arrBuf.slice(0);
     pdfjsLib.getDocument({data:arrBuf}).promise.then(pdf=>{
       pdfDoc=pdf;
       $('cv-empty').style.display='none';
