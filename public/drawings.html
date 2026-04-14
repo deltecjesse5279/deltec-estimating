@@ -513,7 +513,7 @@ tr:hover .dbtn{opacity:1}
 </div>
 
 <!-- MODALS -->
-<div class="mo" id="link-mo" style="display:none" onclick="if(event.target===this)closeMo('link-mo')">
+<div class="mo" id="link-mo" style="display:none">
   <div class="md">
     <h3>Open Estimate</h3>
     <label>Select estimate</label>
@@ -536,7 +536,7 @@ tr:hover .dbtn{opacity:1}
   </div>
 </div>
 
-<div class="mo" id="push-mo" style="display:none" onclick="if(event.target===this)closeMo('push-mo')">
+<div class="mo" id="push-mo" style="display:none">
   <div class="md" style="max-width:480px;width:95%">
     <h3>Push to Estimate</h3>
     <p style="font-size:12px;color:var(--muted);margin-bottom:10px">Each group below will be pushed as a sheet row into the target estimate sheet. Review before confirming.</p>
@@ -551,7 +551,7 @@ tr:hover .dbtn{opacity:1}
   </div>
 </div>
 
-<div class="mo" id="blank-mo" style="display:none" onclick="if(event.target===this)closeMo('blank-mo')">
+<div class="mo" id="blank-mo" style="display:none">
   <div class="md">
     <h3>Add Custom Item</h3>
     <label>Description</label>
@@ -571,7 +571,7 @@ tr:hover .dbtn{opacity:1}
   </div>
 </div>
 
-<div class="mo" id="assign-mo" style="display:none" onclick="if(event.target===this)closeMo('assign-mo')">
+<div class="mo" id="assign-mo" style="display:none">
   <div class="md" style="max-width:380px;width:92%">
     <h3>Assign to Group</h3>
     <label>New group name</label>
@@ -585,7 +585,7 @@ tr:hover .dbtn{opacity:1}
   </div>
 </div>
 
-<div class="mo" id="new-est-mo" style="display:none" onclick="if(event.target===this)closeMo('new-est-mo')">
+<div class="mo" id="new-est-mo" style="display:none">
   <div class="md" style="max-width:360px;width:92%">
     <h3>New Estimate</h3>
     <p style="font-size:12px;color:var(--muted);margin-bottom:10px">Fill in project details to create a new linked estimate.</p>
@@ -603,7 +603,7 @@ tr:hover .dbtn{opacity:1}
 </div>
 
 
-<div class="mo" id="move-pts-mo" style="display:none" onclick="if(event.target===this)closeMo('move-pts-mo')">
+<div class="mo" id="move-pts-mo" style="display:none">
   <div class="md" style="width:320px">
     <h3>Move selected points</h3>
     <p>Choose a destination takeoff item.</p>
@@ -621,7 +621,7 @@ tr:hover .dbtn{opacity:1}
   </div>
 </div>
 
-<div class="mo" id="color-mo" style="display:none" onclick="if(event.target===this)closeMo('color-mo')">
+<div class="mo" id="color-mo" style="display:none">
   <div class="md">
     <h3>Choose Color</h3>
     <div class="color-grid" id="color-grid"></div>
@@ -728,7 +728,7 @@ const ALL_COLORS  = [
 ];
 
 // ─── State ───
-let pdfDoc=null, curPage=1, pdfFilename='';
+let pdfDoc=null, curPage=1, pdfFilename='', pdfRawBytes=null;
 let zoom=1.0;
 // scaleRaw = px per real foot at zoom=1, PDF_RS=1
 // actual scale = scaleRaw * PDF_RS * zoom
@@ -817,6 +817,15 @@ function switchMain(name){
 }
 
 // ─── PDF ───
+function savePdfToStorage(estId){
+  if(!pdfRawBytes||!estId) return;
+  try{
+    const bytes=new Uint8Array(pdfRawBytes);
+    let b64=''; const chunk=8192;
+    for(let i=0;i<bytes.length;i+=chunk) b64+=String.fromCharCode(...bytes.subarray(i,i+chunk));
+    localStorage.setItem('onsite_pdf_'+estId, btoa(b64));
+  }catch(e){ console.warn('PDF too large for localStorage:',e.message); }
+}
 function loadPDF(file){
   if(!file) return;
   pdfFilename = file.name.replace(/\.pdf$/i,'');
@@ -824,6 +833,7 @@ function loadPDF(file){
   const r=new FileReader();
   r.onload=e=>{
     const arrBuf=e.target.result;
+    pdfRawBytes=arrBuf;
     pdfjsLib.getDocument({data:arrBuf}).promise.then(pdf=>{
       pdfDoc=pdf;
       $('cv-empty').style.display='none';
@@ -831,20 +841,7 @@ function loadPDF(file){
       buildThumbs();
       renderPage(1);
       toast('Loaded: '+file.name);
-      // Store PDF in localStorage for restore on platform switch/reload
-      if(linked&&linked.id){
-        try{
-          const bytes=new Uint8Array(arrBuf);
-          let b64='';
-          const chunk=8192;
-          for(let i=0;i<bytes.length;i+=chunk){
-            b64+=String.fromCharCode(...bytes.subarray(i,i+chunk));
-          }
-          localStorage.setItem('onsite_pdf_'+linked.id,btoa(b64));
-        }catch(e){
-          console.warn('PDF too large for localStorage:',e.message);
-        }
-      }
+      if(linked&&linked.id){ savePdfToStorage(linked.id); }
     }).catch(e=>toast('PDF error: '+e.message));
   };
   r.readAsArrayBuffer(file);
@@ -1957,6 +1954,15 @@ async function confirmLink(){
     }
     localStorage.setItem('onsite_active_id',linked.id);
     if(linked.drawingsState){ applyDrawingsState(linked.drawingsState); }
+    // If PDF is already loaded, persist it now under the newly linked estimate
+    if(pdfRawBytes){
+      try{
+        const bytes=new Uint8Array(pdfRawBytes);
+        let b64=''; const ch=8192;
+        for(let i=0;i<bytes.length;i+=ch) b64+=String.fromCharCode(...bytes.subarray(i,i+ch));
+        localStorage.setItem('onsite_pdf_'+linked.id, btoa(b64));
+      }catch(e){ console.warn('PDF too large for localStorage:',e.message); }
+    }
     updatePushBtn();
     closeMo('link-mo');
     toast('Linked: '+linked.name);
@@ -2061,17 +2067,15 @@ async function confirmPush(){
   });
 
   try{
+    // Capture drawings state BEFORE the POST so it's included in the payload
+    linked.drawingsState=getDrawingsState();
     linked.updatedAt=new Date().toISOString();
     const r=await fetch('/api/estimates',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(linked)});
     if(!r.ok) throw new Error('HTTP '+r.status);
     await r.json();
     sheets=JSON.parse(JSON.stringify(linked.sheets));
-    // Auto-delete empty groups after push
+    // Remove groups that are now empty
     userGroups=userGroups.filter(ug=>items.some(it=>it.groupId===ug.id));
-    // Auto-persist drawings state after push
-    // 16h: remove groups that are now empty
-    userGroups=userGroups.filter(ug=>items.some(it=>it.groupId===ug.id));
-    linked.drawingsState=getDrawingsState();
     closeMo('push-mo');
     const warn=ungrouped.length?' (warning: ungrouped items in "Ungrouped" sheet)':'';
     toast(`Pushed ${sheetsToCreate.length} sheet${sheetsToCreate.length!==1?'s':''}${warn}`);
@@ -2157,6 +2161,7 @@ async function saveLinked(){
   try{
     const r=await fetch('/api/estimates',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(linked)});
     if(!r.ok) throw new Error('HTTP '+r.status);
+    savePdfToStorage(linked.id);
     toast('Saved');
   }catch(e){toast('Save failed: '+e.message);}
 }
@@ -2348,6 +2353,18 @@ renderTO();
     }
   }catch(e){ /* silent fail */ }
 })();
+// Auto-save drawings state when user navigates away or closes tab
+window.addEventListener('beforeunload', ()=>{
+  if(linked && items.length > 0){
+    linked.drawingsState = getDrawingsState();
+    linked.updatedAt = new Date().toISOString();
+    // Use sendBeacon for reliability on unload
+    const blob = new Blob([JSON.stringify(linked)], {type:'application/json'});
+    navigator.sendBeacon('/api/estimates', blob);
+  }
+});
+
+
 </script>
 </body>
 </html>
