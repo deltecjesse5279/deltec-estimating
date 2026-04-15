@@ -891,6 +891,12 @@ select.filter-active{border-color:var(--amber);background:#fffbf2}
       </div>
     </div>
 
+    <!-- Summary sheet selector (shown only when Summary is selected) -->
+    <div id="summary-sheet-selector" style="margin-bottom:16px">
+      <div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">Sheets to include</div>
+      <div id="summary-sheet-checkboxes" style="display:flex;flex-direction:column;gap:6px"></div>
+    </div>
+
     <!-- BoM sheet selector (shown only when BoM is selected) -->
     <div id="bom-sheet-selector" style="display:none;margin-bottom:16px">
       <div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">Sheets to include</div>
@@ -1973,19 +1979,46 @@ function renderTotalsBar(){
     <div class="metric"><label>Total w/tax</label><div class="val green">${fmt(t.total)}</div></div>`;
 }
 
+// Sheet visibility in summary — tracks which sheet indexes are excluded from tally
+const _hiddenSheetIdxs = new Set();
+
+function toggleSheetInSummary(idx){
+  if(_hiddenSheetIdxs.has(idx)){
+    // Re-enabling — no warning needed
+    _hiddenSheetIdxs.delete(idx);
+    renderSummary();
+  } else {
+    // Hiding — warn first
+    showConfirm(
+      `Hiding "${esc(state.sheets[idx]?.name||'this sheet')}" will exclude it from all summary totals and the Cost Breakout. Continue?`,
+      () => { _hiddenSheetIdxs.add(idx); renderSummary(); }
+    );
+  }
+}
+
 function renderSummary(){
   const body=$('summary-body'), foot=$('summary-foot');
   let tM=0,tL=0,tH=0,tS=0;
-  body.innerHTML=state.sheets.map(sh=>{
+  body.innerHTML=state.sheets.map((sh,idx)=>{
+    const hidden = _hiddenSheetIdxs.has(idx);
     const t=sheetTotals(sh);
-    tM+=t.rawMat; tL+=t.rawLab; tH+=t.labHrs; tS+=t.sub;
-    return `<tr><td>${esc(sh.name)}</td>
-      <td style="text-align:right">${fmt(t.rawMat)}</td>
-      <td style="text-align:right">${fmt(t.rawLab)}</td>
-      <td style="text-align:right">${fmtH(t.labHrs)}</td>
-      <td style="text-align:right">${fmt(t.sub)}</td></tr>`;
+    if(!hidden){ tM+=t.rawMat; tL+=t.rawLab; tH+=t.labHrs; tS+=t.sub; }
+    const pillStyle = hidden
+      ? 'display:inline-block;font-size:10px;padding:1px 7px;border-radius:10px;cursor:pointer;background:#fee;color:#c00;border:1px solid #f5b3b3;user-select:none;white-space:nowrap'
+      : 'display:inline-block;font-size:10px;padding:1px 7px;border-radius:10px;cursor:pointer;background:var(--bg2);color:var(--muted);border:1px solid var(--border);user-select:none;white-space:nowrap';
+    const pillLabel = hidden ? '🚫 hidden' : '👁 visible';
+    const rowStyle = hidden ? 'opacity:0.45;' : '';
+    return `<tr style="${rowStyle}">
+      <td style="display:flex;align-items:center;gap:8px">
+        ${esc(sh.name)}
+        <span style="${pillStyle}" onclick="toggleSheetInSummary(${idx})" title="${hidden?'Click to include in totals':'Click to exclude from totals'}">${pillLabel}</span>
+      </td>
+      <td style="text-align:right">${hidden?'—':fmt(t.rawMat)}</td>
+      <td style="text-align:right">${hidden?'—':fmt(t.rawLab)}</td>
+      <td style="text-align:right">${hidden?'—':fmtH(t.labHrs)}</td>
+      <td style="text-align:right">${hidden?'—':fmt(t.sub)}</td></tr>`;
   }).join('');
-  foot.innerHTML=`<tr class="subtotal-row"><td>All sheets</td>
+  foot.innerHTML=`<tr class="subtotal-row"><td>Included sheets</td>
     <td style="text-align:right">${fmt(tM)}</td>
     <td style="text-align:right">${fmt(tL)}</td>
     <td style="text-align:right">${fmtH(tH)}</td>
@@ -1996,7 +2029,8 @@ function renderSummary(){
   // Full BoM per sheet
   const bomSec = $('summary-bom-section');
   if(bomSec){
-    bomSec.innerHTML = state.sheets.map(sh => {
+    bomSec.innerHTML = state.sheets.map((sh, idx) => {
+      if(_hiddenSheetIdxs.has(idx)) return '';
       if(!sh.rows || !sh.rows.length) return '';
       const rowsHtml = sh.rows.map((row, ri) => {
         const c = calcRow(row);
@@ -2062,9 +2096,11 @@ function renderSummary(){
 const BREAKOUT_DEFAULTS = {
   buckets: [
     {id:'MATERIAL', label:'Material',  children:[
-      {id:'mat_mkp',  label:'Markup',    type:'settings', key:'matMkp', visible:true},
-      {id:'mat_pst',  label:'PST',       type:'settings', key:'pst',    visible:true},
-      {id:'mat_oh',   label:'Overhead',  type:'settings', key:'oh',     visible:true},
+      {id:'mat_mkp',    label:'Markup',      type:'settings', key:'matMkp', visible:true},
+      {id:'mat_pst',    label:'PST',         type:'settings', key:'pst',    visible:true},
+      {id:'mat_oh',     label:'Overhead',    type:'settings', key:'oh',     visible:true},
+      {id:'mat_profit', label:'Profit',      type:'settings', key:'profit', visible:true},
+      {id:'mat_cont',   label:'Contingency', type:'settings', key:'cont',   visible:true},
     ]},
     {id:'LABOUR', label:'Labour', children:[
       {id:'lab_mkp',  label:'Markup',    type:'settings', key:'matMkp', visible:false},
@@ -2082,7 +2118,21 @@ const BREAKOUT_DEFAULTS = {
 function getBreakoutConfig(){
   try {
     const saved = JSON.parse(localStorage.getItem('onsite_breakout_config')||'null');
-    if(saved && saved.buckets) return JSON.parse(JSON.stringify(saved));
+    if(saved && saved.buckets){
+      const cfg = JSON.parse(JSON.stringify(saved));
+      // Merge in any children from BREAKOUT_DEFAULTS that are missing from the saved config
+      // (handles schema upgrades — e.g. when profit/cont were added)
+      BREAKOUT_DEFAULTS.buckets.forEach(defBucket => {
+        const savedBucket = cfg.buckets.find(b => b.id === defBucket.id);
+        if(!savedBucket) return;
+        (defBucket.children||[]).forEach(defChild => {
+          if(!savedBucket.children.find(c => c.id === defChild.id)){
+            savedBucket.children.push(JSON.parse(JSON.stringify(defChild)));
+          }
+        });
+      });
+      return cfg;
+    }
   } catch(e){}
   return JSON.parse(JSON.stringify(BREAKOUT_DEFAULTS));
 }
@@ -2129,7 +2179,13 @@ function renderBreakout(tM, tL, tH){
     else if(bucket.id === 'SUBTOTAL') base = (bucketTotals['MATERIAL']||0) + (bucketTotals['LABOUR']||0);
     else if(bucket.id === 'TOTAL') base = bucketTotals['SUBTOTAL']||0;
 
-    const visChildren = (bucket.children||[]).filter(c => c.visible);
+    // Filter: visible AND effective rate is non-zero (hides profit/cont when set to 0)
+    const visChildren = (bucket.children||[]).filter(c => {
+      if(!c.visible) return false;
+      if(c.type === 'settings') return (s[c.key]||0) !== 0;
+      if(c.type === 'pct') return (c.rate||0) !== 0;
+      return true; // flat always show
+    });
     const bucketTotal = bucketTotals[bucket.id];
 
     // Special label for Labour bucket — show hrs and rate
@@ -3596,8 +3652,10 @@ function selectExportFmt(fmt){
     const el = $('fmt-'+f+'-lbl');
     if(el) el.classList.toggle('active', f===fmt);
   });
-  // Show BoM sheet selector only for BoM format
+  // Show the appropriate sheet selector
+  const sumSel = $('summary-sheet-selector');
   const bomSel = $('bom-sheet-selector');
+  if(sumSel) sumSel.style.display = fmt === 'summary' ? 'block' : 'none';
   if(bomSel) bomSel.style.display = fmt === 'bom' ? 'block' : 'none';
 }
 
@@ -3617,8 +3675,13 @@ function selectExportView(view){
 
 function exportPDF(){
   // Don't reset format/view — preserve user's last selection
-  // Just re-render sheet pills in case sheets changed
-  
+  // Populate Summary sheet pills (all active by default)
+  const sumSheetCbs = $('summary-sheet-checkboxes');
+  if(sumSheetCbs){
+    sumSheetCbs.innerHTML = state.sheets.map((sh,i)=>`
+      <div class="export-toggle-btn active" id="sum-sheet-${i}" onclick="this.classList.toggle('active')"
+        style="justify-content:flex-start">${esc(sh.name)}</div>`).join('');
+  }
   // Populate BoM sheet pills (all active by default)
   const sheetCbs = $('bom-sheet-checkboxes');
   if(sheetCbs){
@@ -3626,8 +3689,11 @@ function exportPDF(){
       <div class="export-toggle-btn active" id="bom-sheet-${i}" onclick="this.classList.toggle('active')"
         style="justify-content:flex-start">${esc(sh.name)}</div>`).join('');
   }
+  // Show/hide sheet selectors based on current format
+  const sumSel = $('summary-sheet-selector');
   const bomSel = $('bom-sheet-selector');
-  if(bomSel) bomSel.style.display = 'none';
+  if(sumSel) sumSel.style.display = _exportFmt === 'summary' ? 'block' : 'none';
+  if(bomSel) bomSel.style.display = _exportFmt === 'bom' ? 'block' : 'none';
   // Populate cost breakout toggles from live config
   populateBkToggles();
   $('pdf-modal').style.display='flex';
@@ -3752,6 +3818,14 @@ function confirmExportPDF(){
     const showRaw   = (view === 'office');
     const showHrs   = (view !== 'client');
 
+    // Read which summary sheets are selected
+    const selectedSumIdxs = state.sheets
+      .map((_,i) => ({ i, active: document.getElementById('sum-sheet-'+i)?.classList.contains('active') }))
+      .filter(x => x.active !== false)
+      .map(x => x.i);
+    const sumSheets = (selectedSumIdxs.length ? selectedSumIdxs : state.sheets.map((_,i)=>i))
+      .map(i => state.sheets[i]);
+
     const sumTable = document.createElement('table');
     sumTable.style.cssText = 'width:100%;border-collapse:collapse;font-size:11px;margin-bottom:20px';
     const sumThead = sumTable.createTHead();
@@ -3771,7 +3845,7 @@ function confirmExportPDF(){
 
     const sumTbody = sumTable.createTBody();
     let grandTM=0,grandTL=0,grandTH=0;
-    state.sheets.forEach(sh => {
+    sumSheets.forEach(sh => {
       const t = sheetTotals(sh);
       grandTM+=t.rawMat; grandTL+=t.rawLab; grandTH+=t.labHrs;
       const row = sumTbody.insertRow();
@@ -3790,9 +3864,9 @@ function confirmExportPDF(){
     });
 
     // Totals foot row
-    if(state.sheets.length > 1){
+    if(sumSheets.length > 1){
       const s = getSettings();
-      let allSub=0; state.sheets.forEach(sh=>allSub+=sheetTotals(sh).sub);
+      let allSub=0; sumSheets.forEach(sh=>allSub+=sheetTotals(sh).sub);
       const allTotal = allSub*(1+s.gst+s.pst);
       const foot = sumTbody.insertRow();
       foot.style.cssText='border-top:2px solid #1a1a18;font-weight:700;background:#f5f4f0';
@@ -3814,9 +3888,9 @@ function confirmExportPDF(){
     if(view !== 'field'){
       const cfg = getBreakoutConfig();
       const s = getSettings();
-      // Compute bucket totals
+      // Compute bucket totals using only selected sheets
       let tM2=0, tL2=0, tH2=0;
-      state.sheets.forEach(sh=>{ const t=sheetTotals(sh); tM2+=t.rawMat; tL2+=t.rawLab; tH2+=t.labHrs; });
+      sumSheets.forEach(sh=>{ const t=sheetTotals(sh); tM2+=t.rawMat; tL2+=t.rawLab; tH2+=t.labHrs; });
       const bucketTotals = {};
       cfg.buckets.forEach(bucket => {
         let base = 0;
@@ -3845,8 +3919,14 @@ function confirmExportPDF(){
         else if(bucket.id==='SUBTOTAL') base=(bucketTotals['MATERIAL']||0)+(bucketTotals['LABOUR']||0);
         else if(bucket.id==='TOTAL') base=bucketTotals['SUBTOTAL']||0;
 
-        // Intersect: line must be both config-visible AND toggled on in export modal
-        const visChildren = (bucket.children||[]).filter(c=>c.visible && isBkOn(bucket.id, c.id));
+        // Intersect: line must be config-visible, toggled on in export modal, AND have non-zero rate
+        const visChildren = (bucket.children||[]).filter(c => {
+          if(!c.visible) return false;
+          if(!isBkOn(bucket.id, c.id)) return false;
+          if(c.type === 'settings') return (s[c.key]||0) !== 0;
+          if(c.type === 'pct') return (c.rate||0) !== 0;
+          return true;
+        });
         const showChildren = view==='office' || bucket.id==='MATERIAL' || bucket.id==='SUBTOTAL' || bucket.id==='TOTAL';
         const bucketTotal = bucketTotals[bucket.id];
 
@@ -4013,23 +4093,94 @@ function confirmExportPDF(){
       printDiv.appendChild(sheetBlock);
     });
 
-    // Grand total at end
-    if(inclFields.grandTotal && view !== 'field'){
-      let tS = 0;
-      (selectedSheetIdxs.length ? selectedSheetIdxs : state.sheets.map((_,i)=>i))
-        .forEach(si => { tS += sheetTotals(state.sheets[si]).sub; });
+    // Cost Breakout at end of BoM — same as Summary export
+    if(view !== 'field'){
+      const cfg = getBreakoutConfig();
       const s = getSettings();
-      const gst = tS*s.gst, pst = tS*s.pst, grand = tS+gst+pst;
-      const grandDiv = document.createElement('div');
-      grandDiv.style.cssText = 'margin-top:20px;padding:12px;background:#f5f4f0;border-radius:6px;font-size:12px;page-break-inside:avoid;-webkit-print-color-adjust:exact;print-color-adjust:exact';
-      let gHTML = `<div style="display:flex;justify-content:space-between;margin-bottom:4px"><span>Subtotal</span><b>${fmt(tS)}</b></div>`;
-      if(inclFields.taxLines){
-        gHTML += `<div style="display:flex;justify-content:space-between;margin-bottom:4px"><span>GST (${(s.gst*100).toFixed(0)}%)</span><span>${fmt(gst)}</span></div>`;
-        gHTML += `<div style="display:flex;justify-content:space-between;margin-bottom:4px"><span>PST (${(s.pst*100).toFixed(0)}%)</span><span>${fmt(pst)}</span></div>`;
+      const bomSheets = (selectedSheetIdxs.length ? selectedSheetIdxs : state.sheets.map((_,i)=>i))
+        .map(i => state.sheets[i]);
+      let tM2=0, tL2=0, tH2=0;
+      bomSheets.forEach(sh=>{ const t=sheetTotals(sh); tM2+=t.rawMat; tL2+=t.rawLab; tH2+=t.labHrs; });
+      const bucketTotals = {};
+      cfg.buckets.forEach(bucket => {
+        let base = 0;
+        if(bucket.id==='MATERIAL') base=tM2;
+        else if(bucket.id==='LABOUR') base=tL2;
+        else if(bucket.id==='SUBTOTAL') base=(bucketTotals['MATERIAL']||0)+(bucketTotals['LABOUR']||0);
+        else if(bucket.id==='TOTAL') base=bucketTotals['SUBTOTAL']||0;
+        bucketTotals[bucket.id]=base+(bucket.children||[]).reduce((sum,c)=>sum+calcChild(c,base,s),0);
+      });
+      const final = bucketTotals['TOTAL']||0;
+
+      const bkDiv = document.createElement('div');
+      bkDiv.style.cssText = 'max-width:400px;margin-top:24px;page-break-inside:avoid';
+      const bkLabel = document.createElement('div');
+      bkLabel.style.cssText='font-size:10px;font-weight:700;color:#6b6a66;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px';
+      bkLabel.textContent='Cost Breakout';
+      bkDiv.appendChild(bkLabel);
+
+      const bkTable = document.createElement('table');
+      bkTable.style.cssText='width:100%;border-collapse:collapse;font-size:11px';
+
+      cfg.buckets.forEach(bucket => {
+        let base = 0;
+        if(bucket.id==='MATERIAL') base=tM2;
+        else if(bucket.id==='LABOUR') base=tL2;
+        else if(bucket.id==='SUBTOTAL') base=(bucketTotals['MATERIAL']||0)+(bucketTotals['LABOUR']||0);
+        else if(bucket.id==='TOTAL') base=bucketTotals['SUBTOTAL']||0;
+
+        const visChildren = (bucket.children||[]).filter(c => {
+          if(!c.visible) return false;
+          if(!isBkOn(bucket.id, c.id)) return false;
+          if(c.type === 'settings') return (s[c.key]||0) !== 0;
+          if(c.type === 'pct') return (c.rate||0) !== 0;
+          return true;
+        });
+        const showChildren = view==='office' || bucket.id==='MATERIAL' || bucket.id==='SUBTOTAL' || bucket.id==='TOTAL';
+        const bucketTotal = bucketTotals[bucket.id];
+
+        let parentLabel = bucket.label;
+        if(bucket.id==='LABOUR') parentLabel=`Labour (${tH2.toFixed(1)} hrs @ $${(s.jm||115).toFixed(0)}/hr)`;
+
+        const prow = bkTable.insertRow();
+        prow.style.cssText='background:#f0efeb;-webkit-print-color-adjust:exact;print-color-adjust:exact';
+        const pc = prow.insertCell(); pc.style.cssText='padding:4px 8px;font-weight:600;font-size:11px';
+        pc.textContent=parentLabel;
+        const pv = prow.insertCell(); pv.style.cssText='padding:4px 8px;text-align:right;font-weight:600;font-size:11px';
+        pv.textContent=fmt(base);
+
+        if(showChildren && visChildren.length){
+          visChildren.forEach(c => {
+            const val=calcChild(c,base,s);
+            let rateLabel='';
+            if(c.type==='settings') rateLabel=` (${((s[c.key]||0)*100).toFixed(1)}%)`;
+            else if(c.type==='pct') rateLabel=` (${(c.rate||0).toFixed(1)}%)`;
+            const crow=bkTable.insertRow();
+            const cc=crow.insertCell(); cc.style.cssText='padding:3px 8px 3px 20px;font-size:11px;color:#444';
+            cc.textContent=c.label+rateLabel;
+            const cv=crow.insertCell(); cv.style.cssText='padding:3px 8px;text-align:right;font-size:11px;color:#444';
+            cv.textContent=fmt(val);
+          });
+          const srow=bkTable.insertRow();
+          srow.style.cssText='background:#f8f8f5;-webkit-print-color-adjust:exact;print-color-adjust:exact';
+          const sc=srow.insertCell(); sc.style.cssText='padding:3px 8px 3px 20px;font-size:11px;color:#444';
+          sc.textContent=bucket.label+' Total';
+          const sv=srow.insertCell(); sv.style.cssText='padding:3px 8px;text-align:right;font-size:11px;font-weight:500';
+          sv.textContent=fmt(bucketTotal);
+        }
+      });
+
+      if(showFinalAmt){
+        const frow=bkTable.insertRow();
+        frow.style.cssText='border-top:2px solid #1a1a18;-webkit-print-color-adjust:exact;print-color-adjust:exact';
+        const fc=frow.insertCell(); fc.style.cssText='padding:6px 8px;font-weight:700;font-size:12px';
+        fc.textContent='Final Amount';
+        const fv=frow.insertCell(); fv.style.cssText='padding:6px 8px;text-align:right;font-weight:700;font-size:13px;color:#2d6b1f';
+        fv.textContent=fmt(final);
       }
-      gHTML += `<div style="display:flex;justify-content:space-between;font-size:14px;font-weight:700;margin-top:8px;padding-top:8px;border-top:2px solid #999"><span>Grand Total</span><span style="color:#2d6b1f">${fmt(grand)}</span></div>`;
-      grandDiv.innerHTML = gHTML;
-      printDiv.appendChild(grandDiv);
+
+      bkDiv.appendChild(bkTable);
+      printDiv.appendChild(bkDiv);
     }
 
     document.body.appendChild(printDiv);
