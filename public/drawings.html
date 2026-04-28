@@ -1111,11 +1111,28 @@ function finishCal(){
 }
 
 // ─── Library search ───
+function _fuzzyMatch(query, item){
+  const tokens=query.toLowerCase().trim().split(/\s+/).filter(Boolean);
+  const haystack=(item.code+' '+item.description+' '+item.category+' '+(item.notes||'')).toLowerCase();
+  return tokens.every(t=>haystack.includes(t));
+}
+function _fuzzyScore(query, item){
+  const tokens=query.toLowerCase().trim().split(/\s+/).filter(Boolean);
+  const code=item.code.toLowerCase();
+  const desc=item.description.toLowerCase();
+  let score=0;
+  tokens.forEach(t=>{
+    if(code.startsWith(t)) score+=4;
+    else if(code.includes(t)) score+=3;
+    else if(desc.includes(t)) score+=2;
+    else score+=1;
+  });
+  return score;
+}
 function libSearch(q){
   const el=$('lsr');
   if(!q.trim()){el.style.display='none';return;}
-  const lo=q.toLowerCase();
-  const hits=LIBRARY.filter(i=>i.code.toLowerCase().includes(lo)||i.description.toLowerCase().includes(lo)||i.category.toLowerCase().includes(lo)).slice(0,14);
+  const hits=LIBRARY.filter(i=>_fuzzyMatch(q,i)).sort((a,b)=>_fuzzyScore(q,b)-_fuzzyScore(q,a));
   if(!hits.length){el.style.display='none';return;}
   el.innerHTML=hits.map(i=>`<div class="lri" onclick="selectItem('${esc(i.code)}')">
     <span class="lrcat">${esc(i.category)}</span>
@@ -1527,7 +1544,7 @@ function renderItemCard(it, idx){
     </div>
     <div class="tog-body${isCollapsed?'':' open'}" id="ibody-${it.id}">
       ${it.markups.map((m,mi)=>`
-        <div class="toi">
+        <div class="toi" onclick="event.stopPropagation()">
           <span class="toi-dot" style="background:${it.color}"></span>
           <div class="toi-info">
             <div class="toi-n">${m.type==='linear'?'Run - pg.'+m.page:'Count - pg.'+m.page}</div>
@@ -2087,9 +2104,10 @@ async function confirmPush(){
     if(!r.ok) throw new Error('HTTP '+r.status);
     await r.json();
     sheets=JSON.parse(JSON.stringify(linked.sheets));
-    // Remove groups that are now empty
+    // Remove groups that are now empty (items deleted, not just pushed)
     userGroups=userGroups.filter(ug=>items.some(it=>it.groupId===ug.id));
     closeMo('push-mo');
+    renderGroups();
     const warn=ungrouped.length?' (warning: ungrouped items in "Ungrouped" sheet)':'';
     toast(`Pushed ${sheetsToCreate.length} sheet${sheetsToCreate.length!==1?'s':''}${warn}`);
   }catch(err){toast('Push failed: '+err.message);}
