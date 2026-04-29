@@ -149,17 +149,17 @@ tr.ia-child td:first-child{border-left:3px solid #4a7fd4}
 .ia-name{font-weight:600;font-size:12px;color:#2855a0}
 .ia-toggle{background:none;border:none;cursor:pointer;font-size:11px;color:#4a7fd4;padding:0 4px;font-weight:600;line-height:1}
 /* Item Assembly modal */
-.ia-modal{background:#fff;border-radius:12px;padding:0;width:740px;max-width:96vw;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 8px 40px rgba(0,0,0,.18)}
+.ia-modal{background:#fff;border-radius:12px;padding:0;width:880px;max-width:96vw;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 8px 40px rgba(0,0,0,.18)}
 .ia-modal-header{padding:16px 24px 12px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
 .ia-modal-header h3{font-size:15px;font-weight:600;margin:0}
 .ia-modal-body{padding:16px 24px;overflow-y:auto;flex:1;display:flex;flex-direction:column;gap:12px}
 .ia-modal-footer{padding:12px 24px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end;align-items:center}
 .ia-meta-label{font-size:11px;color:var(--muted);margin-bottom:3px;font-weight:500}
-.ia-items-table{border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
-.ia-items-table table{width:100%;border-collapse:collapse;font-size:12px}
+.ia-items-table{border:1px solid var(--border);border-radius:var(--radius);overflow-x:auto}
+.ia-items-table table{width:100%;min-width:700px;border-collapse:collapse;font-size:12px}
 .ia-items-table th{background:var(--bg2);padding:5px 8px;font-size:11px;font-weight:500;color:var(--muted);border-bottom:1px solid var(--border);text-align:left}
 .ia-items-table th.r{text-align:right}
-.ia-items-table td{padding:4px 6px;border-bottom:1px solid #f0efeb;vertical-align:middle}
+.ia-items-table td{padding:3px 4px;border-bottom:1px solid #f0efeb;vertical-align:middle}
 .ia-items-table td.r{text-align:right;font-variant-numeric:tabular-nums;color:var(--muted)}
 .ia-qty-in{width:58px;font-size:12px;padding:3px 6px;border:1px solid #ddd;border-radius:4px;background:var(--amber-bg);text-align:right}
 .ia-mlt-in{width:52px;font-size:12px;padding:3px 6px;border:1px solid #ddd;border-radius:4px;background:#f0f8ff;text-align:right}
@@ -352,9 +352,15 @@ select.filter-active{border-color:var(--amber);background:#fffbf2}
     <button class="btn" onclick="openIAModal()" style="background:#e8f0fe;border-color:#4a7fd4;color:#2855a0" title="Add a temporary custom assembly (not saved to Assemblies tab)">+ item assembly</button>
   </div>
   <div class="takeoff-wrap">
+    <div id="row-select-toolbar" style="display:none;background:#e8f0fe;border:1px solid #4a7fd4;border-radius:6px;padding:6px 12px;margin-bottom:6px;display:none;align-items:center;gap:10px;font-size:12px">
+      <span id="row-select-count" style="color:#2855a0;font-weight:500">0 rows selected</span>
+      <button class="btn sm" onclick="createIAFromSelected()" style="background:#4a7fd4;color:#fff;border-color:#3a6bc4">Create Item Assembly from selected</button>
+      <button class="btn sm" onclick="clearRowSelection()">Cancel</button>
+    </div>
     <table>
       <thead>
         <tr>
+          <th style="width:22px"><input type="checkbox" id="select-all-rows" onclick="toggleSelectAllRows(this.checked)" title="Select all rows"/></th>
           <th style="width:26px">#</th>
           <th style="min-width:150px">Code / Item</th>
           <th style="min-width:180px">Description</th>
@@ -965,7 +971,7 @@ select.filter-active{border-color:var(--amber);background:#fffbf2}
       <div style="display:grid;grid-template-columns:1fr 1fr 90px;gap:10px">
         <div><div class="ia-meta-label">Assembly Name</div><input id="ia-name" type="text" style="width:100%;font-size:13px;padding:6px 9px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg2)" placeholder="e.g. Wire in EMT with bends"/></div>
         <div><div class="ia-meta-label">Description (optional)</div><input id="ia-desc" type="text" style="width:100%;font-size:13px;padding:6px 9px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg2)" placeholder="Brief description"/></div>
-        <div><div class="ia-meta-label">Overall Qty</div><input id="ia-qty" type="number" min="1" value="1" style="width:100%;font-size:13px;padding:6px 9px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg2)" oninput="renderIAItems()"/></div>
+        <div><div class="ia-meta-label">Overall Qty</div><input id="ia-qty" type="number" min="1" value="1" style="width:100%;font-size:13px;padding:6px 9px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg2)" oninput="iaRefreshTotals()"/></div>
       </div>
       <div style="display:flex;gap:8px;align-items:center">
         <div class="ia-sdrop">
@@ -977,12 +983,15 @@ select.filter-active{border-color:var(--amber);background:#fffbf2}
       <div class="ia-items-table">
         <table>
           <thead><tr>
-            <th>Code / Item</th><th>Description</th><th class="r">Unit</th>
-            <th class="r" style="width:66px">Qty/unit</th>
-            <th class="r" style="width:58px">Mult ×</th>
-            <th class="r" style="width:76px">Mat $/unit</th>
-            <th class="r" style="width:66px">Lab hrs</th>
-            <th class="r">Mat total</th><th class="r">Lab $</th>
+            <th style="width:18px"></th>
+            <th style="min-width:80px">Code</th><th style="min-width:120px">Description</th><th class="r" style="width:36px">Unit</th>
+            <th class="r" style="width:56px" title="Qty per assembly unit">Qty/unit</th>
+            <th class="r" style="width:48px" title="Multiplier (0 = absolute)">Mult</th>
+            <th class="r" style="width:48px" title="Divisor">Div</th>
+            <th class="r" style="width:70px">Mat$/unit</th>
+            <th class="r" style="width:60px">Lab hrs</th>
+            <th class="r" style="width:76px">Mat $</th>
+            <th class="r" style="width:76px">Lab $</th>
             <th style="width:22px"></th>
           </tr></thead>
           <tbody id="ia-items-body"></tbody>
@@ -1114,16 +1123,26 @@ function calcRow(row){
     return {mat, hrs, lab};
   }
   if(row._itemAssembly){
-    // Item Assembly (temporary, blue) — sum children × multiplier × overall qty
     const overallQty = parseFloat(row.qty)||1;
     let mat=0, hrs=0;
     (row._iaChildren||[]).forEach(ch=>{
-      const childQty = (parseFloat(ch.qty)||0) * (parseFloat(ch.multiplier)||1) * overallQty;
+      const qty = Math.max(parseFloat(ch.qty)||0, 0);
+      const rawMult = ch.multiplier==='' ? 1 : parseFloat(ch.multiplier);
+      const rawDiv  = ch.divisor===''   ? 1 : parseFloat(ch.divisor);
+      const multIsZero = !isNaN(rawMult) && rawMult===0;
+      const divIsZero  = !isNaN(rawDiv)  && rawDiv===0;
+      let childQty;
+      if(multIsZero || divIsZero){
+        childQty = qty; // absolute
+      } else {
+        const mult = Math.max(isNaN(rawMult)?1:rawMult, 0);
+        const div  = Math.max(isNaN(rawDiv) ?1:rawDiv,  0.000001);
+        childQty = (qty * mult * overallQty) / div;
+      }
       mat += childQty * (parseFloat(ch.mat_unit)||0);
       hrs += childQty * (parseFloat(ch.labour_unit)||0);
     });
-    const lab = hrs * s.jm;
-    return {mat, hrs, lab};
+    return {mat, hrs, lab: hrs * s.jm};
   }
   const qty = parseFloat(row.qty)||0;
   const mat = qty*(parseFloat(row.mat_unit)||0);
@@ -1625,6 +1644,66 @@ function duplicateSheet(){
   showToast('Sheet duplicated: '+newSheet.name);
 }
 
+// ============================================================
+// MULTI-SELECT ROW ACTIONS
+// ============================================================
+function onRowSelChange(){
+  const cbs = document.querySelectorAll('.row-sel-cb');
+  const checked = [...cbs].filter(cb=>cb.checked);
+  const toolbar = $('row-select-toolbar');
+  if(checked.length > 0){
+    toolbar.style.display='flex';
+    $('row-select-count').textContent = checked.length + ' row' + (checked.length!==1?'s':'') + ' selected';
+  } else {
+    toolbar.style.display='none';
+  }
+}
+
+function toggleSelectAllRows(checked){
+  document.querySelectorAll('.row-sel-cb').forEach(cb=>{ cb.checked=checked; });
+  onRowSelChange();
+}
+
+function clearRowSelection(){
+  document.querySelectorAll('.row-sel-cb').forEach(cb=>{ cb.checked=false; });
+  const sa=$('select-all-rows'); if(sa) sa.checked=false;
+  $('row-select-toolbar').style.display='none';
+}
+
+function createIAFromSelected(){
+  const rows = state.sheets[state.activeSheet].rows;
+  const selected = [...document.querySelectorAll('.row-sel-cb:checked')].map(cb=>parseInt(cb.dataset.idx));
+  if(!selected.length){ showToast('No rows selected'); return; }
+  // Build children from selected rows — skip _assembly and _itemAssembly rows
+  const children = [];
+  selected.forEach(idx=>{
+    const r = rows[idx];
+    if(!r || r._assembly || r._itemAssembly) return;
+    children.push({
+      code: r.code||'',
+      description: r.description||'',
+      unit: r.unit||'ea',
+      mat_unit: parseFloat(r.mat_unit)||0,
+      labour_unit: parseFloat(r.labour_unit)||0,
+      qty: parseFloat(r.qty)||1,
+      multiplier: 1,
+      divisor: 1
+    });
+  });
+  if(!children.length){ showToast('No compatible rows selected (assemblies cannot be converted)'); return; }
+  // Pre-populate modal and open it
+  _iaEditIdx = null;
+  _iaItems = children;
+  $('ia-name').value = 'Item Assembly';
+  $('ia-desc').value = '';
+  $('ia-qty').value = 1;
+  $('ia-search').value='';
+  $('ia-search-drop').style.display='none';
+  renderIAItems();
+  $('ia-modal').style.display='flex';
+  clearRowSelection();
+}
+
 function toggleIARow(idx){
   const row=state.sheets[state.activeSheet].rows[idx];
   if(!row||!row._itemAssembly) return;
@@ -1637,6 +1716,7 @@ function toggleIARow(idx){
 // ============================================================
 let _iaItems = [];
 let _iaEditIdx = null;
+let _iaDragSrc = null;
 
 function openIAModal(editIdx){
   _iaEditIdx = (editIdx!==undefined) ? editIdx : null;
@@ -1690,49 +1770,131 @@ function iaAddBlank(){
 
 function iaRemoveItem(ci){ _iaItems.splice(ci,1); renderIAItems(); }
 
-function iaUpdateItem(ci,field,val){
-  if(!_iaItems[ci]) return;
-  _iaItems[ci][field]=(field==='code'||field==='description'||field==='unit')?val:(parseFloat(val)||0);
+function iaDragStart(e, ci){
+  _iaDragSrc = ci;
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', ci);
+  setTimeout(()=>{ if(e.target) e.target.style.opacity='0.4'; }, 0);
+}
+function iaDragOver(e, ci){
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  // Highlight target row
+  document.querySelectorAll('#ia-items-body tr').forEach((r,i)=>{
+    r.style.background = (i===ci && i!==_iaDragSrc) ? 'var(--bg2)' : '';
+  });
+}
+function iaDrop(e, ci){
+  e.preventDefault();
+  if(_iaDragSrc===null || _iaDragSrc===ci) return;
+  const moved = _iaItems.splice(_iaDragSrc, 1)[0];
+  _iaItems.splice(ci, 0, moved);
+  _iaDragSrc = null;
   renderIAItems();
 }
+function iaDragEnd(e){
+  _iaDragSrc = null;
+  document.querySelectorAll('#ia-items-body tr').forEach(r=>{ r.style.opacity=''; r.style.background=''; });
+}
 
-function renderIAItems(){
-  const body=$('ia-items-body');
-  const s=getSettings();
-  const overallQty=parseFloat($('ia-qty').value)||1;
-  if(!_iaItems.length){
-    body.innerHTML=`<tr><td colspan="10" class="empty-msg" style="padding:12px;font-style:italic">No items yet — search the library or add a blank item above.</td></tr>`;
-    $('ia-items-foot').innerHTML='';
-    $('ia-totals-row').innerHTML='';
-    return;
+function iaUpdateItem(ci, field, val){
+  if(!_iaItems[ci]) return;
+  // Store raw value — numeric fields stored as numbers, text fields as strings
+  if(field==='code'||field==='description'||field==='unit'){
+    _iaItems[ci][field] = val;
+  } else {
+    // Allow empty string during typing — store as-is, treat as 0 in calcs
+    _iaItems[ci][field] = val === '' ? '' : parseFloat(val);
   }
-  let tMat=0,tHrs=0,tLab=0;
-  body.innerHTML=_iaItems.map((ch,ci)=>{
-    const childQty=(parseFloat(ch.qty)||0)*(parseFloat(ch.multiplier)||1)*overallQty;
-    const cMat=childQty*(parseFloat(ch.mat_unit)||0);
-    const cHrs=childQty*(parseFloat(ch.labour_unit)||0);
-    const cLab=cHrs*s.jm;
-    tMat+=cMat; tHrs+=cHrs; tLab+=cLab;
-    return `<tr>
-      <td><input class="inline-input" style="width:88px;font-size:12px" value="${esc(ch.code||'')}" placeholder="code" oninput="iaUpdateItem(${ci},'code',this.value)"/></td>
-      <td><input class="inline-input" style="min-width:130px;font-size:12px" value="${esc(ch.description||'')}" placeholder="description" oninput="iaUpdateItem(${ci},'description',this.value)"/></td>
-      <td class="r"><input class="inline-input" style="width:36px;font-size:11px;text-align:right" value="${esc(ch.unit||'')}" placeholder="unit" oninput="iaUpdateItem(${ci},'unit',this.value)"/></td>
-      <td class="r"><input class="ia-qty-in" type="number" min="0" step="any" value="${ch.qty||1}" title="Qty per unit" oninput="iaUpdateItem(${ci},'qty',this.value)"/></td>
-      <td class="r"><input class="ia-mlt-in" type="number" min="0" step="any" value="${ch.multiplier||1}" title="Multiplier" oninput="iaUpdateItem(${ci},'multiplier',this.value)"/></td>
-      <td class="r"><input class="inline-input" type="number" step="any" style="width:68px;text-align:right;font-size:11px" value="${ch.mat_unit||''}" placeholder="0.00" oninput="iaUpdateItem(${ci},'mat_unit',this.value)"/></td>
-      <td class="r"><input class="inline-input" type="number" step="any" style="width:60px;text-align:right;font-size:11px" value="${ch.labour_unit||''}" placeholder="0.0000" oninput="iaUpdateItem(${ci},'labour_unit',this.value)"/></td>
-      <td class="r" style="font-size:11px">${fmt(cMat)}</td>
-      <td class="r" style="font-size:11px">${fmt(cLab)}</td>
-      <td><button onclick="iaRemoveItem(${ci})" style="background:none;border:none;cursor:pointer;color:#ccc;font-size:13px;padding:0 3px" onmouseover="this.style.color='#a32d2d'" onmouseout="this.style.color='#ccc'">&#10005;</button></td>
-    </tr>`;
-  }).join('');
-  $('ia-items-foot').innerHTML=`<tr style="background:var(--bg2);font-weight:500;font-size:12px;border-top:2px solid var(--border)">
-    <td colspan="7" style="padding:5px 8px;color:var(--muted)">Totals (overall qty × ${overallQty})</td>
+  // Only refresh totals row — do NOT re-render the table (would steal focus)
+  iaRefreshTotals();
+}
+
+function iaChildEffectiveQty(ch, overallQty){
+  const qty = Math.max(parseFloat(ch.qty) || 0, 0);
+  const rawMult = ch.multiplier === '' ? 1 : parseFloat(ch.multiplier);
+  const rawDiv  = ch.divisor   === '' ? 1 : parseFloat(ch.divisor);
+  // If mult=0 OR div=0 → treat qty as absolute (no scaling applied)
+  const multIsZero = !isNaN(rawMult) && rawMult === 0;
+  const divIsZero  = !isNaN(rawDiv)  && rawDiv  === 0;
+  if(multIsZero || divIsZero) return qty;
+  // Clamp negatives to 0 — no negative multipliers or divisors allowed
+  const mult = Math.max(isNaN(rawMult) ? 1 : rawMult, 0);
+  const div  = Math.max(isNaN(rawDiv)  ? 1 : rawDiv,  0.000001);
+  return (qty * mult * overallQty) / div;
+}
+
+function iaRefreshTotals(){
+  const s = getSettings();
+  const overallQty = parseFloat($('ia-qty').value) || 1;
+  let tMat=0, tHrs=0, tLab=0;
+  _iaItems.forEach(ch => {
+    const effQty = iaChildEffectiveQty(ch, overallQty);
+    tMat += effQty * (parseFloat(ch.mat_unit) || 0);
+    const hrs = effQty * (parseFloat(ch.labour_unit) || 0);
+    tHrs += hrs;
+    tLab += hrs * s.jm;
+  });
+  const foot = $('ia-items-foot');
+  if(foot) foot.innerHTML = `<tr style="background:var(--bg2);font-weight:500;font-size:12px;border-top:2px solid var(--border)">
+    <td colspan="8" style="padding:5px 8px;color:var(--muted)">Totals (overall qty × ${overallQty})</td>
     <td class="r" style="padding:5px 8px">${fmt(tMat)}</td>
     <td class="r" style="padding:5px 8px">${fmt(tLab)}</td>
     <td></td>
   </tr>`;
-  $('ia-totals-row').innerHTML=`<span>Mat: <strong>${fmt(tMat)}</strong></span><span style="margin-left:12px">Lab: <strong>${fmt(tLab)}</strong></span><span style="margin-left:12px">Hrs: <strong>${fmtH(tHrs)}</strong></span>`;
+  const tot = $('ia-totals-row');
+  if(tot) tot.innerHTML = `<span>Mat: <strong>${fmt(tMat)}</strong></span><span style="margin-left:12px">Lab: <strong>${fmt(tLab)}</strong></span><span style="margin-left:12px">Hrs: <strong>${fmtH(tHrs)}</strong></span>`;
+}
+
+function renderIAItems(){
+  const body = $('ia-items-body');
+  const overallQty = parseFloat($('ia-qty').value) || 1;
+  if(!_iaItems.length){
+    body.innerHTML = `<tr><td colspan="11" class="empty-msg" style="padding:12px;font-style:italic">No items yet — search the library or add a blank item above.</td></tr>`;
+    $('ia-items-foot').innerHTML = '';
+    $('ia-totals-row').innerHTML = '';
+    return;
+  }
+  const s = getSettings();
+  body.innerHTML = _iaItems.map((ch, ci) => {
+    const effQty = iaChildEffectiveQty(ch, overallQty);
+    const cMat = effQty * (parseFloat(ch.mat_unit) || 0);
+    const cHrs = effQty * (parseFloat(ch.labour_unit) || 0);
+    const cLab = cHrs * s.jm;
+    const multVal = ch.multiplier === '' ? '' : (ch.multiplier ?? 1);
+    const divVal  = ch.divisor   === '' ? '' : (ch.divisor   ?? 1);
+    return `<tr draggable="true"
+      ondragstart="iaDragStart(event,${ci})"
+      ondragover="iaDragOver(event,${ci})"
+      ondrop="iaDrop(event,${ci})"
+      ondragend="iaDragEnd(event)"
+      style="cursor:default">
+      <td style="width:18px;cursor:grab;color:#bbb;font-size:14px;padding:0 4px;text-align:center" title="Drag to reorder">⠿</td>
+      <td><input class="inline-input" style="width:86px;font-size:12px" value="${esc(ch.code||'')}" placeholder="code"
+        oninput="iaUpdateItem(${ci},'code',this.value)"
+        onblur="renderIAItems()"/></td>
+      <td><input class="inline-input" style="min-width:128px;font-size:12px" value="${esc(ch.description||'')}" placeholder="description"
+        oninput="iaUpdateItem(${ci},'description',this.value)"
+        onblur="renderIAItems()"/></td>
+      <td class="r"><input class="inline-input" style="width:34px;font-size:11px;text-align:right" value="${esc(ch.unit||'')}" placeholder="unit"
+        oninput="iaUpdateItem(${ci},'unit',this.value)"
+        onblur="renderIAItems()"/></td>
+      <td class="r"><input class="ia-qty-in" type="number" step="any" value="${ch.qty===''?'':ch.qty??1}" title="Qty per assembly unit"
+        oninput="iaUpdateItem(${ci},'qty',this.value)"/></td>
+      <td class="r"><input class="ia-mlt-in" type="number" step="any" value="${multVal}" placeholder="1" title="Multiplier (0 = absolute)"
+        oninput="iaUpdateItem(${ci},'multiplier',this.value)"/></td>
+      <td class="r"><input class="ia-mlt-in" type="number" step="any" min="0.0001" value="${divVal}" placeholder="1" title="Divisor"
+        oninput="iaUpdateItem(${ci},'divisor',this.value)" style="background:#fff8e6"/></td>
+      <td class="r"><input class="inline-input" type="number" step="any" style="width:66px;text-align:right;font-size:11px" value="${ch.mat_unit===''?'':ch.mat_unit??''}" placeholder="0.00"
+        oninput="iaUpdateItem(${ci},'mat_unit',this.value)"/></td>
+      <td class="r"><input class="inline-input" type="number" step="any" style="width:58px;text-align:right;font-size:11px" value="${ch.labour_unit===''?'':ch.labour_unit??''}" placeholder="0.0000"
+        oninput="iaUpdateItem(${ci},'labour_unit',this.value)"/></td>
+      <td class="r" style="font-size:11px;white-space:nowrap">${fmt(cMat)}</td>
+      <td class="r" style="font-size:11px">${fmt(cLab)}</td>
+      <td><button onclick="iaRemoveItem(${ci})" style="background:none;border:none;cursor:pointer;color:#ccc;font-size:13px;padding:0 3px" onmouseover="this.style.color='#a32d2d'" onmouseout="this.style.color='#ccc'">&#10005;</button></td>
+    </tr>`;
+  }).join('');
+  iaRefreshTotals();
 }
 
 function iaInsert(){
@@ -2090,20 +2252,33 @@ function renderTakeoff(){
       const childCount = (row._iaChildren||[]).length;
       const subRows = expanded ? (row._iaChildren||[]).map((ch,ci)=>{
         const overallQty = parseFloat(row.qty)||1;
-        const childQty = (parseFloat(ch.qty)||0)*(parseFloat(ch.multiplier)||1)*overallQty;
-        const cMat = childQty*(parseFloat(ch.mat_unit)||0);
-        const cHrs = childQty*(parseFloat(ch.labour_unit)||0);
+        const qty = parseFloat(ch.qty)||0;
+        const rawMult = ch.multiplier==='' ? 1 : parseFloat(ch.multiplier);
+        const rawDiv  = ch.divisor===''   ? 1 : parseFloat(ch.divisor);
+        const multIsZero = !isNaN(rawMult) && rawMult===0;
+        const divIsZero  = !isNaN(rawDiv)  && rawDiv===0;
+        let effQty;
+        if(multIsZero||divIsZero){ effQty=qty; }
+        else {
+          const mult=Math.max(isNaN(rawMult)?1:rawMult,0);
+          const div=Math.max(isNaN(rawDiv)?1:rawDiv,0.000001);
+          effQty=(qty*mult*overallQty)/div;
+        }
+        const cMat = effQty*(parseFloat(ch.mat_unit)||0);
+        const cHrs = effQty*(parseFloat(ch.labour_unit)||0);
         const cLab = cHrs*getSettings().jm;
+        const effDisplay = Number.isInteger(effQty) ? effQty.toString() : effQty.toFixed(2).replace(/\.?0+$/,'');
         return `<tr class="ia-child">
           <td></td>
-          <td style="padding-left:20px;color:#3a5fa8">${esc(ch.code||'—')}</td>
-          <td style="color:#3a5fa8">${esc(ch.description||'—')}</td>
+          <td></td>
+          <td style="padding-left:20px;color:#3a5fa8;font-size:11px">${esc(ch.code||'—')}</td>
+          <td style="color:#3a5fa8;font-size:11px">${esc(ch.description||'—')}</td>
           <td><span class="unit-badge">${esc(ch.unit||'')}</span></td>
-          <td class="num">${(parseFloat(ch.qty)||0).toFixed(2)} × ${(parseFloat(ch.multiplier)||1).toFixed(2)}</td>
-          <td class="num">${ch.mat_unit?fmt(parseFloat(ch.mat_unit),4):''}</td>
-          <td class="num">${fmt(cMat)}</td>
-          <td class="num">${ch.labour_unit?(parseFloat(ch.labour_unit)).toFixed(4):''}</td>
-          <td class="num">${fmt(cLab)}</td>
+          <td class="num" style="font-size:11px">${effDisplay}</td>
+          <td class="num" style="font-size:11px">${ch.mat_unit?fmt(parseFloat(ch.mat_unit),4):''}</td>
+          <td class="num" style="font-size:11px">${fmt(cMat)}</td>
+          <td class="num" style="font-size:11px">${ch.labour_unit?(parseFloat(ch.labour_unit)).toFixed(4):''}</td>
+          <td class="num" style="font-size:11px">${fmt(cLab)}</td>
           <td></td><td></td>
         </tr>`;
       }).join('') : '';
@@ -2113,6 +2288,7 @@ function renderTakeoff(){
         ondragleave="onRowDragLeave(event)"
         ondrop="onRowDrop(event,${i})"
         ondragend="onRowDragEnd(event)">
+        <td><input type="checkbox" class="row-sel-cb" data-idx="${i}" onchange="onRowSelChange()"/></td>
         <td class="row-num"><span class="drag-handle" title="Drag to reorder">⠿</span>${i+1}</td>
         <td colspan="2">
           <button class="ia-toggle" onclick="toggleIARow(${i})">${expanded?'▼':'▶'}</button>
@@ -2152,6 +2328,7 @@ function renderTakeoff(){
       ondragleave="onRowDragLeave(event)"
       ondrop="onRowDrop(event,${i})"
       ondragend="onRowDragEnd(event)">
+      <td><input type="checkbox" class="row-sel-cb" data-idx="${i}" onchange="onRowSelChange()"/></td>
       <td class="row-num"><span class="drag-handle" title="Drag to reorder">⠿</span>${i+1}</td>
       <td>
         ${isCustom
@@ -2169,13 +2346,9 @@ function renderTakeoff(){
         : `<span class="unit-badge">${esc(row.unit||'')}</span>`}</td>
       <td><input class="qty-input" type="number" min="0" value="${row.qty||''}" placeholder="0"
         oninput="updateQty(${i},this.value)" onchange="updateQty(${i},this.value)" onblur="updateQty(${i},this.value)"/></td>
-      <td class="num">${isCustom
-        ? `<input type="number" value="${row.mat_unit||''}" placeholder="0.00" step="0.01" style="width:72px;text-align:right;font-size:12px;padding:2px 5px;border:1px solid var(--border);border-radius:4px;background:var(--amber-bg)" oninput="updateRowFieldSoft(${i},'mat_unit',parseFloat(this.value)||0)" onchange="updateRowField(${i},'mat_unit',parseFloat(this.value)||0)"/>`
-        : (row.mat_unit?fmt(row.mat_unit,2):'')}</td>
+      <td class="num"><input type="number" value="${row.mat_unit||''}" placeholder="0.00" step="0.01" style="width:72px;text-align:right;font-size:12px;padding:2px 5px;border:1px solid ${isCustom?'var(--border)':'transparent'};border-radius:4px;background:${isCustom?'var(--amber-bg)':'transparent'}" oninput="updateRowFieldSoft(${i},'mat_unit',parseFloat(this.value)||0)" onchange="updateRowField(${i},'mat_unit',parseFloat(this.value)||0)" onfocus="this.style.border='1px solid var(--border)';this.style.background='var(--amber-bg)'" onblur="this.style.border='${isCustom?'1px solid var(--border)':'1px solid transparent'}';this.style.background='${isCustom?'var(--amber-bg)':'transparent'}'"/></td>
       <td class="num">${row.qty?fmt(c.mat):''}</td>
-      <td class="num">${isCustom
-        ? `<input type="number" value="${row.labour_unit||''}" placeholder="0.000" step="0.001" style="width:60px;text-align:right;font-size:12px;padding:2px 5px;border:1px solid var(--border);border-radius:4px;background:var(--amber-bg)" oninput="updateRowFieldSoft(${i},'labour_unit',parseFloat(this.value)||0)" onchange="updateRowField(${i},'labour_unit',parseFloat(this.value)||0)"/>`
-        : (row.labour_unit?(row.labour_unit).toFixed(3):'')}</td>
+      <td class="num"><input type="number" value="${row.labour_unit||''}" placeholder="0.000" step="0.001" style="width:60px;text-align:right;font-size:12px;padding:2px 5px;border:1px solid ${isCustom?'var(--border)':'transparent'};border-radius:4px;background:${isCustom?'var(--amber-bg)':'transparent'}" oninput="updateRowFieldSoft(${i},'labour_unit',parseFloat(this.value)||0)" onchange="updateRowField(${i},'labour_unit',parseFloat(this.value)||0)" onfocus="this.style.border='1px solid var(--border)';this.style.background='var(--amber-bg)'" onblur="this.style.border='${isCustom?'1px solid var(--border)':'1px solid transparent'}';this.style.background='${isCustom?'var(--amber-bg)':'transparent'}'"/></td>
       <td class="num">${row.qty?fmt(c.lab):''}</td>
       <td><input class="notes-input" type="text" value="${esc(row.notes||'')}" placeholder="notes"
         oninput="updateNotes(${i},this.value)"/></td>
@@ -2417,6 +2590,7 @@ const BREAKOUT_DEFAULTS = {
       {id:'mat_cont',   label:'Contingency', type:'settings', key:'cont',   visible:true},
     ]},
     {id:'LABOUR', label:'Labour', children:[
+      {id:'lab_adj',  label:'Labour Adjustment', type:'custom_adj', adjType:'hrs', adjVal:0, visible:false},
       {id:'lab_mkp',  label:'Markup',    type:'settings', key:'matMkp', visible:false},
       {id:'lab_pst',  label:'PST',       type:'settings', key:'pst',    visible:false},
       {id:'lab_oh',   label:'Overhead',  type:'settings', key:'oh',     visible:false},
@@ -2461,6 +2635,14 @@ function calcChild(child, base, s){
   if(child.type === 'settings') return base * (s[child.key]||0);
   if(child.type === 'pct') return base * ((child.rate||0)/100);
   if(child.type === 'flat') return (child.rate||0);
+  if(child.type === 'custom_adj'){
+    if(child.adjType === 'hrs') return (child.adjVal||0) * (s.jm||115);
+    if(child.adjType === 'pct'){
+      // % of total labour hours × JM rate
+      const totalHrs = (s.jm||115) > 0 ? base / (s.jm||115) : 0;
+      return totalHrs * ((child.adjVal||0)/100) * (s.jm||115);
+    }
+  }
   return 0;
 }
 
@@ -2498,6 +2680,7 @@ function renderBreakout(tM, tL, tH){
       if(!c.visible) return false;
       if(c.type === 'settings') return (s[c.key]||0) !== 0;
       if(c.type === 'pct') return (c.rate||0) !== 0;
+      if(c.type === 'custom_adj') return (c.adjVal||0) !== 0;
       return true; // flat always show
     });
     const bucketTotal = bucketTotals[bucket.id];
@@ -2512,10 +2695,25 @@ function renderBreakout(tM, tL, tH){
       let rateLabel = '';
       if(c.type==='settings') rateLabel = ` (${((s[c.key]||0)*100).toFixed(1)}%)`;
       else if(c.type==='pct') rateLabel = ` (${(c.rate||0).toFixed(1)}%)`;
+      else if(c.type==='custom_adj' && c.adjType==='hrs') rateLabel = ` (${(c.adjVal||0).toFixed(2)} hrs)`;
+      else if(c.type==='custom_adj' && c.adjType==='pct'){
+        const adjHrs = tH * ((c.adjVal||0)/100);
+        rateLabel = ` (${(c.adjVal||0).toFixed(1)}% = ${adjHrs.toFixed(2)} hrs)`;
+      }
       html += `<div class="bk-child">${esc(c.label)}${rateLabel}<span>${fmt(val)}</span></div>`;
     });
     if(visChildren.length){
-      html += `<div class="bk-parent" style="font-size:12px;background:var(--bg2);padding:5px 12px">${bucket.label} Total<span>${fmt(bucketTotal)}</span></div>`;
+      let totalLabel = `${bucket.label} Total`;
+      if(bucket.id === 'LABOUR'){
+        const adjChild = (bucket.children||[]).find(c=>c.id==='lab_adj' && c.visible);
+        let adjHrs = 0;
+        if(adjChild){
+          adjHrs = adjChild.adjType==='hrs' ? (adjChild.adjVal||0) : tH*((adjChild.adjVal||0)/100);
+        }
+        const adjTotal = tH + adjHrs;
+        totalLabel = `Labour Total (${adjTotal.toFixed(2)} hrs @ $${(s.jm||115).toFixed(2)}/hr)`;
+      }
+      html += `<div class="bk-parent" style="font-size:12px;background:var(--bg2);padding:5px 12px">${totalLabel}<span>${fmt(bucketTotal)}</span></div>`;
     }
   });
 
@@ -2608,6 +2806,19 @@ function custSetChildRate(bucketId, ci, val){
   bucket.children[ci].rate = parseFloat(val)||0;
 }
 
+function custSetAdjType(bucketId, ci, type){
+  const bucket = _custCfg.buckets.find(b=>b.id===bucketId);
+  if(!bucket) return;
+  bucket.children[ci].adjType = type;
+  renderCustomizeList();
+}
+
+function custSetAdjVal(bucketId, ci, val){
+  const bucket = _custCfg.buckets.find(b=>b.id===bucketId);
+  if(!bucket) return;
+  bucket.children[ci].adjVal = parseFloat(val)||0;
+}
+
 function custSetChildLabel(bucketId, ci, val){
   const bucket = _custCfg.buckets.find(b=>b.id===bucketId);
   if(!bucket) return;
@@ -2624,6 +2835,13 @@ function renderCustomizeList(){
       if(c.type==='settings') rateDisplay = `<span class="cust-rate">${((s[c.key]||0)*100).toFixed(1)}% (from settings)</span>`;
       else if(c.type==='pct') rateDisplay = `<input type="number" value="${c.rate||0}" step="0.1" style="width:52px;font-size:11px;padding:2px 4px;border:1px solid var(--border);border-radius:4px" oninput="custSetChildRate('${bucket.id}',${ci},this.value)"/><span class="cust-rate">%</span>`;
       else if(c.type==='flat') rateDisplay = `<span class="cust-rate">$</span><input type="number" value="${c.rate||0}" step="1" style="width:64px;font-size:11px;padding:2px 4px;border:1px solid var(--border);border-radius:4px" oninput="custSetChildRate('${bucket.id}',${ci},this.value)"/>`;
+      else if(c.type==='custom_adj') rateDisplay = `
+        <select style="font-size:11px;padding:2px 3px;border:1px solid var(--border);border-radius:4px;margin-right:4px" onchange="custSetAdjType('${bucket.id}',${ci},this.value)">
+          <option value="hrs"${c.adjType==='hrs'?' selected':''}>hrs</option>
+          <option value="pct"${c.adjType==='pct'?' selected':''}>%</option>
+        </select>
+        <input type="number" value="${c.adjVal||0}" step="${c.adjType==='hrs'?'0.5':'0.1'}" style="width:64px;font-size:11px;padding:2px 4px;border:1px solid var(--border);border-radius:4px" oninput="custSetAdjVal('${bucket.id}',${ci},this.value)"/>
+        <span class="cust-rate">${c.adjType==='hrs'?`× $${(s.jm||115).toFixed(0)}/hr`:'% of labour'}</span>`;
 
       return `<div class="cust-row${c.visible?'':' hidden-row'}"
         draggable="true"
