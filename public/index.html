@@ -1191,7 +1191,8 @@ let state = {
   sheets: [{id:1, name:'Sheet 1', rows:[]}],
   activeSheet: 0,
   nextSheetId: 2,
-  settings: {jm:115,app:72,matMkp:10,oh:15,profit:10,cont:0,gst:5,pst:7}
+  settings: {jm:115,app:72,matMkp:10,oh:15,profit:10,cont:0,gst:5,pst:7},
+  breakoutConfig: null
 };
 
 let dirty = false;
@@ -2769,11 +2770,13 @@ const BREAKOUT_DEFAULTS = {
   ]
 };
 
+// Breakout config is stored on state.breakoutConfig (saved/loaded per estimate via
+// collectPayload()/loadEstimate()), NOT in localStorage. It must lock to whichever
+// project is currently loaded, the same way Labour Rates and Markup/Taxes already do.
 function getBreakoutConfig(){
   try {
-    const saved = JSON.parse(localStorage.getItem('onsite_breakout_config')||'null');
-    if(saved && saved.buckets){
-      const cfg = JSON.parse(JSON.stringify(saved));
+    if(state.breakoutConfig && state.breakoutConfig.buckets){
+      const cfg = state.breakoutConfig;
       // Merge in any children from BREAKOUT_DEFAULTS that are missing from the saved config
       // (handles schema upgrades — e.g. when profit/cont were added)
       BREAKOUT_DEFAULTS.buckets.forEach(defBucket => {
@@ -2788,11 +2791,13 @@ function getBreakoutConfig(){
       return cfg;
     }
   } catch(e){}
-  return JSON.parse(JSON.stringify(BREAKOUT_DEFAULTS));
+  state.breakoutConfig = JSON.parse(JSON.stringify(BREAKOUT_DEFAULTS));
+  return state.breakoutConfig;
 }
 
 function saveBreakoutConfig(cfg){
-  localStorage.setItem('onsite_breakout_config', JSON.stringify(cfg));
+  state.breakoutConfig = cfg;
+  markDirty();
 }
 
 // Compute a child's $ contribution given a base value
@@ -3752,6 +3757,7 @@ function collectPayload(){
       profit:$('s-profit').value, cont:$('s-cont').value,
       gst:$('s-gst').value, pst:$('s-pst').value
     },
+    breakoutConfig: getBreakoutConfig(),
     nextSheetId: state.nextSheetId,
     status: state.status || 'bidding',
     total: projectGrandTotal()
@@ -4065,6 +4071,7 @@ async function loadEstimate(id){
     state.nextSheetId=d.nextSheetId||state.sheets.length+1;
     state.id=d.id;
     state.status=d.status||'bidding';
+    state.breakoutConfig = d.breakoutConfig || null;
     if(d.projectDetails){
       $('s-address').value=d.projectDetails.address||'';
       $('s-po').value=d.projectDetails.po||'';
@@ -4097,7 +4104,7 @@ async function loadEstimate(id){
 
 function newEstimate(){
   if(dirty && !confirm('Unsaved changes will be lost. Continue?')) return;
-  state={id:null,status:'bidding',sheets:[{id:1,name:'Sheet 1',rows:[]}],activeSheet:0,nextSheetId:2};
+  state={id:null,status:'bidding',sheets:[{id:1,name:'Sheet 1',rows:[]}],activeSheet:0,nextSheetId:2,breakoutConfig:null};
   $('proj-name').value='';$('proj-client').value='';$('proj-num').value='';
   $('s-address').value='';$('s-po').value='';$('s-tender').value='';
   $('s-estimator').value='';$('s-contact').value='';$('s-contactinfo').value='';
